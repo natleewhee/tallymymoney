@@ -61,6 +61,8 @@ Verify secret → identify bank by sender → parse → insert with `Message-ID`
 
 **Unrecognised-pattern triage (FR-4/FR-20).** Before parsing, look up `(sender, subject)` in `sender_rules`. A hit with `action = 'ignore'` archives the email — no Telegram message, no row anywhere. A hit with `action = 'needs_parser'` inserts into `unclassified_emails` and stops there — no repeat alert for a pattern already queued. No hit at all means this `(sender, subject)` pair has never been seen: insert into `unclassified_emails` with `status = 'pending_review'` and send a one-time Telegram triage message with two buttons, **Ignore this type** and **Needs parser**, either of which writes the `sender_rules` row so the decision is made once per pattern, not once per email. Confirmed viable by real DBS/UOB/Trust/Citibank samples in `SPIKE-01-RESULTS.md`, where distinct transaction types reliably carry distinct, stable subject lines from the same sending address — `(sender, subject)` is a real fingerprint, not a guess. (One DBS subject, `"iBanking Alerts"`, may turn out not to be unique — flagged there, not yet resolved.)
 
+**Foreign-currency conversion (FR-2/FR-22).** When `currency != 'SGD'`, ingest calls a spot-rate lookup — **Frankfurter** (ECB reference rates, free, no API key, no signup) is the default pick, matching the $0/month constraint — and stores the result as `sgd_amount_cents` / `fx_rate` with `fx_source = 'spot_estimate'`. The Telegram notification (FR-6) marks these visibly, e.g. "≈ SGD 566.90 (estimated)". If the lookup fails (API down, unsupported currency), fall back to the most recent cached rate for that currency pair rather than blocking the transaction — a stale estimate beats no transaction at all, and it's getting corrected anyway. Nat corrects it later via FR-22 once he has the real posted amount; card-network FX carries a markup (typically 1–3%) that a spot/interbank rate will never match exactly, so a difference between the estimate and the statement is expected, not a bug.
+
 ### `/api/telegram`
 Webhook for button callbacks and slash commands. Sub-second work only.
 
@@ -75,10 +77,23 @@ Trimmed hard from `ideation-archive/schema-full.sql`. Single user, so no `users`
 CREATE TABLE transactions (
   id                    SERIAL PRIMARY KEY,
   email_message_id      TEXT UNIQUE NOT NULL,   -- idempotency, enforced by the DB
-  amount_cents          BIGINT NOT NULL,        -- integers, never floats. Every row here
-                                                 -- parsed successfully — see unclassified_emails
+  amount_cents          BIGINT NOT NULL,        -- integers, never floats. Original amount,
+                                                 -- original currency. Every row here parsed
+                                                 -- successfully — see unclassified_emails
                                                  -- below for anything that didn't
   currency              CHAR(3) NOT NULL DEFAULT 'SGD',
+  sgd_amount_cents       BIGINT NOT NULL,        -- FR-2/FR-22: what every report actually
+                                                 -- sums. Equal to amount_cents when
+                                                 -- currency = 'SGD'; for anything else, a
+                                                 -- spot-rate conversion at ingest time
+  fx_source              TEXT NOT NULL DEFAULT 'na'
+                          CHECK (fx_source IN ('na','spot_estimate','confirmed')),
+                                                 -- 'na' for SGD rows. 'spot_estimate' until
+                                                 -- Nat corrects it via FR-22, then 'confirmed'
+  fx_rate                 NUMERIC,               -- rate actually used, kept for audit —
+                                                 -- card-network FX includes a markup a spot
+                                                 -- rate won't capture, which is the whole
+                                                 -- reason FR-22 exists
   direction              TEXT NOT NULL CHECK (direction IN ('debit','credit')),
   merchant_raw          TEXT,                   -- exactly as the bank wrote it
   merchant_normalised   TEXT,                   -- what drives memory and reports
@@ -139,6 +154,7 @@ CREATE TABLE sender_rules (
 
 CREATE INDEX idx_tx_occurred    ON transactions (occurred_at DESC);
 CREATE INDEX idx_tx_status      ON transactions (status) WHERE status = 'pending';
+CREATE INDEX idx_tx_fx_estimate ON transactions (id) WHERE fx_source = 'spot_estimate';
 CREATE INDEX idx_unclassified   ON unclassified_emails (status) WHERE status != 'ignored';
 ```
 
@@ -150,6 +166,7 @@ Deliberate departures from the dump:
 - **A row only ever reaches `transactions` if it parsed successfully.** An earlier version of this schema put `'unparsed'` in `transactions.status`, which quietly contradicted `amount_cents NOT NULL` — there is no real amount to store for an email that failed to parse. Fixed by moving that state out entirely: `unclassified_emails` holds anything that isn't a clean transaction — an unrecognised `(sender, subject)` pair or a previously-working pattern that returned nothing — and `sender_rules` holds Nat's one-time Ignore/Needs-parser decision per pattern (FR-4/FR-20). An email that arrived and could not be turned into a transaction is still data; it just isn't a `transactions` row.
 - **`account_identifier`, not `account_last4`.** Trust's alerts never include a last-4, only the card product name. Confirmed by Nat as sufficient for a single-card setup — the column stores whichever the bank actually gives.
 - **`reduces_transaction_id` (FR-21), narrower than the dropped `matched_transaction_id`.** A manual "this refund/reversal reduces that earlier transaction" link, picked from a short recent list — not full income matching. Added directly from a real Trust partial-reversal pair found in the SPIKE-01 samples; confirmed by Nat 2026-08-16 as the whole solution wanted here, deliberately simpler than automatic detection.
+- **`sgd_amount_cents` / `fx_source` / `fx_rate` (FR-2/FR-22).** The dump assumed SGD-only and never faced this. A real Citibank sample forced the question — a foreign-currency alert with no SGD figure at all — and Nat's answer was spot-rate now, corrected later, not "wait for the statement" or "reject foreign currency." `amount_cents` stays the original-currency amount; `sgd_amount_cents` is what every report actually sums.
 
 Dropped from the dump: `users`, `email_credentials_encrypted`, `archived_to_sheets`, `monthly_summaries` (derivable on demand at this volume). `matched_transaction_id` — the *general* income-matching case (one payment settling several expenses, or anything outside `reduces_transaction_id`'s short recent list) — stays deferred to Phase 5 as FR-17.
 
@@ -163,6 +180,7 @@ Dropped from the dump: `users`, `email_credentials_encrypted`, `archived_to_shee
 | Telegram | **grammY** | Built for serverless webhooks; `telegraf` assumes a long-lived process |
 | Scheduling | Apps Script (5 min) + Vercel daily cron | Works inside free-tier limits rather than against them |
 | Secrets | Vercel env vars | One user, no credential storage problem to solve |
+| FX rates | **Frankfurter** (ECB reference rates) | Free, no API key, no signup — matches the $0/month constraint. New dependency as of FR-2/FR-22; only called for the (expected to be rare) non-SGD transaction |
 
 ## 6. Security
 
