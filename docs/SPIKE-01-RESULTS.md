@@ -85,3 +85,11 @@ Both open findings from this batch (partial reversals, foreign-currency amounts)
 **The auto-forward filter went live 2026-08-16 — this is when the real coverage clock starts.** Everything above is convenience-sample evidence collected before automated capture existed; it proves parseability, not coverage. From today, the dedicated inbox accumulates unattended, and Steps 1–2 (the real inventory and the statement cross-check that actually renders a verdict) become possible once ~2 weeks have passed, or sooner if Nat can pull a statement for a period that overlaps with what's landed in the inbox so far.
 
 Two things still open, unrelated to the wait: per-bank alert thresholds haven't been confirmed at minimum (checklist item in `SPIKE-01-email-parsing.md`), and whether the Gmail filter's "apply to matching conversations" backfill option was used — if so, some history may already be sitting in the dedicated inbox and the wait could be shorter than two weeks.
+
+**Confirmed by Nat 2026-08-16: yes to both.** Backfill was applied — the dedicated inbox already holds some pre-filter history, not just fresh forward-only mail. Alert thresholds are confirmed at minimum across banks. Step 0 is now fully closed.
+
+## Decision: proceeding to build ahead of the coverage verdict
+
+Nat's call, 2026-08-16: start Phase 2 (capture pipeline) and Phase 3 (Telegram bot) now, rather than waiting out the full ~2-week coverage measurement first. Recorded here rather than silently overriding `STRATEGY.md`'s original phasing.
+
+Why this is defensible rather than reckless: every bank in scope has produced at least one cleanly-parsed real sample (9/9), the manual quick-entry fallback (FR-18) exists specifically to absorb whatever coverage gaps turn out to be real, and nothing built so far is wasted if the eventual coverage number comes back CONDITIONAL rather than GO — the parsers and schema don't change, only how much weight falls on FR-18. A genuine NO-GO (<70%, per the Step 5 table) would be the one outcome that actually invalidates this decision; nothing in the evidence so far points that way, but it hasn't been ruled out either. Steps 1–2 keep running in the background regardless — see `STRATEGY.md` for the updated phase status.
