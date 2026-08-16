@@ -1,6 +1,6 @@
 # TallyMyMoney — Strategy
 
-**Status:** awaiting approval · **Date:** 2026-08-16 · **Phase:** 0 (strategy, nothing built)
+**Status:** approved · **Date:** 2026-08-16 · **Phase:** 2/3 (capture pipeline + Telegram bot, building — ahead of the coverage verdict, see §3)
 
 ---
 
@@ -33,11 +33,11 @@ Everything else — the bot, the schema, the reports — is ordinary work. This 
 
 The ideation dump contains regex patterns for DBS, OCBC and Citibank. **Those patterns were invented by a language model, not observed from real email.** They are worth exactly nothing as evidence.
 
-So the build order is not "database, then backend, then bot." It is:
+So the build order was meant to be not "database, then backend, then bot," but:
 
 **Prove the input exists → build the pipe → build the interface.**
 
-`SPIKE-01-email-parsing.md` is the first and only task until it returns a verdict.
+**Update, 2026-08-16: Nat chose to start building ahead of the coverage verdict.** All 5 banks in scope produced at least one cleanly-parsed real sample (see `SPIKE-01-RESULTS.md`) and the auto-forward filter is live, so Steps 1–2 (the actual coverage measurement) keep running in the background while Phase 2/3 build proceeds in parallel, rather than gating it. The one outcome that would actually undo this decision is a coverage number that comes back NO-GO (<70%, per Step 5's table) — nothing seen so far points that way, but it hasn't been ruled out. `SPIKE-01-email-parsing.md` remains the source of truth for that number when it lands.
 
 ## 4. Architecture, in one line
 
