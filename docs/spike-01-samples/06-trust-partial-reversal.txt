@@ -1,0 +1,37 @@
+From: from_us@trustbank.sg
+Subject: Transaction partially reversed
+Format: HTML + plain text (both present, plain text used here)
+Captured: 2026-08-16 (transaction occurred 2026-08-16)
+
+---
+
+Didn't do this? Please contact us via your Trust App.
+
+We've partially reversed your purchase at Cabcharge Asia Pte Ltd SINGAPORE
+SG on 16 Aug 2026 12:45SGT. SGD 0.30 is released to your Freedom credit
+card.
+
+---
+
+Extracted:
+  direction: credit (reversal)
+  amount: SGD 0.30
+  account_identifier: "Freedom credit card" — product name only, no last-4
+  occurred_at: 2026-08-16 12:45 SGT (same timestamp as the original charge)
+  merchant: "Cabcharge Asia Pte Ltd SINGAPORE SG" — same string as 05,
+            same whitespace irregularity
+
+This is a distinct email (distinct Message-ID) from 05-trust-card-spend,
+not a duplicate — Message-ID-based dedup correctly keeps both rows. But
+naively summing both as independent transactions overstates spend by
+SGD 0.30; the honest net for this purchase is SGD 20.00.
+
+The schema in docs/ARCHITECTURE.md has no concept of "this transaction
+reverses/adjusts that one." FR-17 (income matching, deferred to Phase 5)
+was scoped around a different problem — a *payment* settling a *prior
+expense* — not a same-day partial reversal from the *same bank* referring
+to the *same purchase*. This is a smaller, more tractable version: same
+merchant + same timestamp + opposite direction, arriving within minutes,
+is a strong enough signal to auto-link without a manual matching UI.
+Worth a small addition to Phase 3 (flag as a possible reversal, don't
+auto-net) rather than waiting for the full Phase 5 income-matching design.

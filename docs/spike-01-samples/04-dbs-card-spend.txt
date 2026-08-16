@@ -1,0 +1,42 @@
+From: ibanking.alert@dbs.com
+Subject: Card Transaction Alert
+Format: HTML + plain text (both present, plain text used here)
+Captured: 2026-08-16 (transaction occurred 2026-08-16)
+
+---
+
+Card Transaction Alert
+
+Transaction Ref: SP1400857710000000185627
+
+Dear Sir / Madam,
+
+We refer to your card transaction request dated 16/08/26. We are pleased to
+confirm that the transaction was completed.
+
+Date & Time: 16 AUG 18:56 (SGT)
+Amount: SGD13.32
+From: DBS/POSB card ending XXXX
+To: KOPITIAM FP APP PAYMEN Singapore SGP
+
+---
+
+Extracted:
+  direction: debit
+  amount: SGD 13.32
+  account_last4: XXXX (redacted; was 4 digits)
+  occurred_at: 2026-08-16 18:56 SGT
+  merchant: KOPITIAM FP APP PAYMEN Singapore SGP
+  transaction_ref: SP1400857710000000185627
+
+Note: same "Date & Time: / Amount: / From: / To:" shape as the PayLah
+alert (03), but a different sending address (ibanking.alert@dbs.com vs
+paylah.alert@dbs.com) and a different Transaction Ref prefix (SP vs PLPE).
+DBS appears to share one template family across products/sender
+addresses — good sign for extraction, still only 2 of however many DBS
+notification types exist.
+
+Merchant string is an acquirer-truncated code ("KOPITIAM FP APP PAYMEN"),
+not a clean business name — the merchant-normalisation risk flagged in
+Step 3 of SPIKE-01-email-parsing.md, confirmed on the first DBS card
+sample seen.

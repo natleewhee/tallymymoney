@@ -28,7 +28,7 @@ No other personas. The `ideation-archive/prd-draft.md` personas ("Sarah, 28, Mar
 ## 4. Non-goals
 
 - Not accounting software, not budgeting, not net worth tracking
-- Not multi-currency in v1 — SGD only; foreign-currency transactions record the SGD posted amount
+- Not multi-currency in v1 — SGD only; foreign-currency transactions record the SGD posted amount. **This assumption is now in question, not decided:** a real Citibank sample (`docs/SPIKE-01-RESULTS.md`) shows a foreign-currency alert with no SGD figure at all — card-network FX conversion posts days later, after the real-time alert already fired. Whether v1 records the original currency instead, or defers foreign-currency transactions until a settlement figure exists, is open for Nat's call before Phase 2
 - No investment tracking. That is [[Entry Expert]]'s job and mixing them would damage both
 - No web UI. Telegram is the entire interface
 - No other users, ever, under the current scale intent
@@ -45,8 +45,11 @@ Priorities are P0 (v1 cannot ship without it), P1 (v1 should have it), P2 (later
 | FR-1 | Bank alert emails reach the system via the dedicated forwarding inbox | P0 | An alert sent to Nat's Gmail appears at `/api/ingest` within 5 minutes |
 | FR-2 | Extract amount, direction, date, merchant, bank, account last-4 | P0 | Meets the accuracy thresholds set in SPIKE-01 |
 | FR-3 | The same email can never create two transactions | P0 | Replaying an identical POST changes nothing. Enforced by DB constraint, not application logic |
-| FR-4 | An email that cannot be parsed produces a Telegram alert and an `unparsed` row | P0 | Nat learns about a broken parser the same day, not at month end |
-| FR-5 | Non-transaction mail (statements, marketing, security notices) is discarded quietly | P1 | No Telegram noise from a monthly statement email |
+| FR-4 | **First sighting** of an email pattern — an unrecognised `(sender, subject)` pair, or a previously-working pattern whose parser now returns nothing — triggers a one-time Telegram triage message. It is never silently dropped and never silently assumed to be a transaction | P0 | Nat learns about a new or broken pattern the same day, not at month end, and exactly once per pattern — not once per email |
+| FR-20 | The triage message offers two actions: **Ignore this type** or **Needs parser** | P0 | See breakdown below |
+| FR-20a | **Ignore this type** writes a permanent rule keyed on `(sender, subject)`. Every future email matching that pair is archived with no Telegram message and no row created | P0 | A monthly-statement email or security notice, once dismissed, never asks again |
+| FR-20b | **Needs parser** marks the pattern for rework. Matching emails stop re-alerting (no repeat spam for the same unsolved pattern) but keep accumulating, and the count of pending-parser patterns is surfaced in `/pending` and in every report per FR-15 | P0 | A genuinely new bank notification type gets queued for a real fix instead of nagging Nat or vanishing |
+| FR-5 | Once a `(sender, subject)` pair is marked Ignore via FR-20a, matching mail is discarded quietly, permanently, until the rule is manually removed | P1 | Superseded by FR-20a — kept as the steady-state description of the behaviour it produces |
 
 ### 5.2 Telegram interaction
 
@@ -59,6 +62,7 @@ Priorities are P0 (v1 cannot ship without it), P1 (v1 should have it), P2 (later
 | FR-10 | An `Ignore` action marks the transaction excluded from all reporting | P0 | Card verification holds, refunds, own-account transfers |
 | FR-11 | Description can be edited by replying to the message | P1 | Free text saved against the transaction |
 | FR-12 | Untagged transactions can be swept later via `/pending` | P1 | Missing a notification doesn't lose the transaction |
+| FR-21 | **Reduce action:** on any transaction — a refund, a partial reversal, cashback, anything that isn't a clean new expense — Nat can tap **Reduce a transaction** instead of categorising it. Shows a short list of recent transactions; picking one nets the current amount off that transaction's total | P0, Phase 3 | Confirmed by Nat 2026-08-16, in response to a real Trust partial-reversal pair found in SPIKE-01 samples (charge SGD 20.30, reversal SGD 0.30 two minutes later). Deliberately manual — no automatic reversal detection. See schema addition (`reduces_transaction_id`) in `ARCHITECTURE.md` |
 
 ### 5.3 Reporting
 
@@ -73,7 +77,7 @@ Priorities are P0 (v1 cannot ship without it), P1 (v1 should have it), P2 (later
 
 | ID | Requirement | Note |
 |---|---|---|
-| FR-17 | Match an incoming payment to prior expenses | The dump's "show last 5 expenses" fails on partial repayments, one payment settling several expenses, and anything older than a few days. Needs a real design before it is worth building |
+| FR-17 | Match an incoming payment to prior expenses — the general case: one payment settling several expenses, or something older than FR-21's short recent list | The dump's "show last 5 expenses" fails on partial repayments and multi-expense settlement. Needs a real design before it is worth building. **The narrower same-transaction-refund case is no longer deferred** — see FR-21, confirmed by Nat 2026-08-16 |
 
 ### 5.5 Manual entry and partner visibility — confirmed 2026-08-16
 

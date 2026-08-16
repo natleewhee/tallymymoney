@@ -1,0 +1,56 @@
+From: alerts@citibank.com.sg
+Subject: Citi Alerts - Credit Card/Ready Credit Transaction
+Format: plain text + HTML (both present, plain text used here)
+Captured: 2026-08-16, transaction occurred 2026-04-20 (raw original)
+
+---
+
+Dear Customer,
+We would like to inform you that there is a charge made on your Citi Rewards Card:
+
+Account Number           : XXXX-XXXX-XXXX-XXXX
+Transaction date         : 20/04/26
+Transaction time         : 05:38:23
+Transaction amount       : JPY102080.00
+Transaction  details     : BKG*Hakoneji Kaiun     Amsterdam     NLD
+
+Thank you for using Citi Alerts.
+
+---
+
+Extracted:
+  direction: debit
+  amount: JPY 102,080.00 — NOT SGD. No SGD-converted amount anywhere in
+    this email.
+  account_last4: XXXX (Citi already masks to XXXX-XXXX-XXXX-{last4} in
+    the source; last4 further redacted here)
+  occurred_at: 2026-04-20 05:38:23 (no timezone stated — Citi's other
+    fields imply SGT but this one doesn't say so explicitly)
+  merchant: "BKG*Hakoneji Kaiun     Amsterdam     NLD" — a Booking.com
+    acquirer-prefixed descriptor ("BKG*") for what is actually a Japanese
+    business, processed through a Netherlands-domiciled acquirer. The
+    merchant string reflects payment routing, not the real-world business
+    location — confirms the merchant-normalisation risk from Step 3 in a
+    new way (previous samples showed formatting noise; this shows the
+    string can point somewhere geographically unrelated to the purchase).
+
+FINDING — foreign-currency purchases may only alert in the original
+currency, not SGD:
+
+PRD.md's non-goal says "foreign-currency transactions record the SGD
+posted amount." This alert doesn't have one. Card networks post the FX
+conversion to SGD days after the original charge, once cross-border
+settlement completes — the real-time alert fires before that number
+exists, so it cannot possibly be in this email. This isn't a Citi-specific
+parsing gap; it's a timing fact about how card FX settlement works, and
+will presumably recur for any bank's foreign-currency alert.
+
+**This is not decided here.** Two real options for Nat to choose from,
+not chosen in this document:
+  (a) record the transaction in its original currency (JPY here), tag it
+      immediately, and accept the SGD total is an approximation until/
+      unless a later statement corrects it; or
+  (b) hold foreign-currency transactions in a separate pending state and
+      only surface them once a follow-up email (if the bank sends one)
+      confirms the SGD amount — unknown yet whether Citi (or DBS/UOB/
+      Trust) sends that follow-up at all.
