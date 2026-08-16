@@ -1,6 +1,6 @@
 # SPIKE-01 — Can bank alert emails carry this product?
 
-**Status:** in progress — Step 0 done (dedicated inbox live, first alerts forwarding), Steps 3–4 have early evidence, Steps 1–2 (coverage) not started · **Blocks:** everything · **Effort:** ~1 day of work, ~2 weeks wall-clock
+**Status:** in progress — Step 0 done (dedicated inbox live, auto-forward filter live as of 2026-08-16), Steps 3–4 have early evidence, Steps 1–2 (coverage) not started, clock now running · **Blocks:** everything · **Effort:** ~1 day of work, ~2 weeks wall-clock
 
 ---
 
@@ -133,7 +133,9 @@ Write the verdict, with the evidence table, into `docs/SPIKE-01-RESULTS.md`. Inc
 
 ## Deliverables
 
-- [x] Dedicated inbox created and receiving forwarded mail (`nattytallymonny@gmail.com`) — auto-forward filter and per-bank alert threshold settings still to be recorded
+- [x] Dedicated inbox created and receiving forwarded mail (`nattytallymonny@gmail.com`)
+- [x] Auto-forward filter live on the main account as of 2026-08-16 — matching `paylah.alert@dbs.com`, `ibanking.alert@dbs.com`, `unialerts@uobgroup.com`, `from_us@trustbank.sg`, `alerts@citibank.com.sg`, skip-inbox, labelled. Amex not yet in the filter — no confirmed sender address
+- [ ] Per-bank alert threshold settings (email alerts on, minimum $ threshold) — not yet confirmed per bank
 - [~] `SPIKE-01-RESULTS.md` — started, early format/extraction evidence recorded; coverage table, full inventory and verdict still open
 - [~] Sanitised corpus — 6 fixtures in `spike-01-samples/`, account numbers redacted, amounts kept (needed for accuracy testing, a deliberate deviation from "redacted" — see the file headers for why)
 - [ ] A recommendation on D2: does the forward-to-dedicated-address route survive contact with reality?

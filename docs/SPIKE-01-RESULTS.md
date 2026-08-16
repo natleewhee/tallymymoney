@@ -6,7 +6,7 @@
 
 ## What's confirmed
 
-**The dedicated inbox exists and forwarding works.** Nat created `nattytallymonny@gmail.com` and manually forwarded several real alert emails to it on 2026-08-16, ahead of setting up the Gmail auto-forward filter from §0a. This answers SPIKE-01 Step 0 in substance, if not yet via the automated filter.
+**The dedicated inbox exists and the auto-forward filter is live.** Nat created `nattytallymonny@gmail.com`, manually forwarded nine real samples on 2026-08-16 to seed this document, then set up the actual Gmail filter the same day — matching the five confirmed sender addresses, skip-inbox, labelled. Step 0 is now fully done. From this point, capture is unattended; nothing further needs to be manually forwarded for the banks already confirmed.
 
 **All five banks in scope have now produced at least one real, parseable per-transaction alert.** DBS, UOB, Trust and Citibank confirmed by sample as of this update. Amex remains the one bank with zero evidence either way.
 
@@ -82,4 +82,6 @@ Both open findings from this batch (partial reversals, foreign-currency amounts)
 
 ## Status
 
-Nat: *"that is all i have for now. for future emails, we will take it step by step."* Pausing sample intake here — next samples get processed incrementally as they arrive, not batched. Once ~2 weeks of forwarding has accumulated (or a full month's history is available another way), run Steps 1–2 for real and update this document with an actual verdict.
+**The auto-forward filter went live 2026-08-16 — this is when the real coverage clock starts.** Everything above is convenience-sample evidence collected before automated capture existed; it proves parseability, not coverage. From today, the dedicated inbox accumulates unattended, and Steps 1–2 (the real inventory and the statement cross-check that actually renders a verdict) become possible once ~2 weeks have passed, or sooner if Nat can pull a statement for a period that overlaps with what's landed in the inbox so far.
+
+Two things still open, unrelated to the wait: per-bank alert thresholds haven't been confirmed at minimum (checklist item in `SPIKE-01-email-parsing.md`), and whether the Gmail filter's "apply to matching conversations" backfill option was used — if so, some history may already be sitting in the dedicated inbox and the wait could be shorter than two weeks.
