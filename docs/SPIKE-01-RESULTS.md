@@ -64,11 +64,11 @@ Samples #5 and #6 are two separate emails (distinct Message-IDs, ~2 minutes apar
 
 **Resolved by Nat 2026-08-16: no automatic reversal detection.** Instead, any transaction gets a manual **Reduce a transaction** action — pick from a short list of recent transactions, the credit nets against the chosen one — alongside the existing **Ignore**. Simpler than the auto-linking I'd originally floated, and simpler than `FR-17`'s full income-matching design (still deferred to Phase 5 for the harder cases — multiple expenses settled by one payment, or anything outside the recent list). Written up as FR-21 in `PRD.md`; schema addition (`reduces_transaction_id`) in `ARCHITECTURE.md`.
 
-## A second finding the plan didn't anticipate: foreign-currency alerts may carry no SGD amount
+## A second finding the plan didn't anticipate: foreign-currency alerts may carry no SGD amount — resolved by Nat
 
 Sample #9 (Citibank, JPY 102,080.00 at a Japan-based merchant) contains no SGD figure anywhere in the email. Card-network FX conversion posts to SGD days after the original charge — the real-time alert fires before that number exists, so no bank's real-time alert can plausibly contain it for a foreign-currency purchase. This isn't a Citibank-specific gap; expect it from any bank whenever the transaction wasn't in SGD to begin with.
 
-This contradicts `PRD.md`'s non-goal that foreign-currency transactions "record the SGD posted amount" — that's not obtainable from a real-time alert. **Not decided here** — see the note in `spike-01-samples/09-citi-card-fx-spend.txt` for the two live options (record in original currency and accept an approximate SGD total, vs. hold foreign-currency transactions pending a follow-up email that may or may not exist). Flagged in `PRD.md` for Nat's call.
+**Resolved by Nat 2026-08-16: "for FX, just assume spot rate, and allow me to amend once I check the actual statement."** Ingest converts at spot rate immediately (Frankfurter, ECB reference rates — free, no key), flags the result as an estimate, and Nat corrects it later once the real posted SGD amount is known. Written up as FR-2/FR-22 in `PRD.md`; schema (`sgd_amount_cents`, `fx_source`, `fx_rate`) in `ARCHITECTURE.md`. Worth remembering going in: a spot/interbank rate will not match the card network's actual conversion, which typically carries a 1–3% markup — the estimate and the eventual statement figure are expected to differ, that's exactly what FR-22 exists to fix, not a sign anything is broken.
 
 ## What's still needed before Step 5 can render a verdict
 
@@ -76,7 +76,9 @@ This contradicts `PRD.md`'s non-goal that foreign-currency transactions "record 
 2. **The Step 2 coverage measurement** — cross-check one full month against real statements. This is the number that actually gates go/no-go. Nothing above substitutes for it
 3. **Amex samples** — the one remaining bank in scope with zero evidence
 4. **More transaction types per confirmed bank** — GIRO, ATM withdrawal, online vs in-person card spend, and enough volume to run the real 70/30 held-out accuracy split from Step 4, rather than eyeballing nine hand-picked examples
-5. **The foreign-currency decision** (above) and confirmation of whether `"iBanking Alerts"` as a DBS subject line is ambiguous across transaction types
+5. Confirmation of whether `"iBanking Alerts"` as a DBS subject line is ambiguous across transaction types — minor, not blocking
+
+Both open findings from this batch (partial reversals, foreign-currency amounts) are now resolved — see above.
 
 ## Status
 

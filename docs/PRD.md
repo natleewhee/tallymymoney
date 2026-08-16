@@ -28,7 +28,7 @@ No other personas. The `ideation-archive/prd-draft.md` personas ("Sarah, 28, Mar
 ## 4. Non-goals
 
 - Not accounting software, not budgeting, not net worth tracking
-- Not multi-currency in v1 — SGD only; foreign-currency transactions record the SGD posted amount. **This assumption is now in question, not decided:** a real Citibank sample (`docs/SPIKE-01-RESULTS.md`) shows a foreign-currency alert with no SGD figure at all — card-network FX conversion posts days later, after the real-time alert already fired. Whether v1 records the original currency instead, or defers foreign-currency transactions until a settlement figure exists, is open for Nat's call before Phase 2
+- Not multi-currency in v1 — every transaction is reported in SGD. **Resolved 2026-08-16, see FR-2 and FR-22:** a real Citibank sample showed a foreign-currency alert with no SGD figure at all — card-network FX conversion posts days later, after the real-time alert already fired, so no alert can contain it. v1 converts at spot rate immediately (an estimate, clearly flagged as such) and lets Nat correct it once the real posted amount is on his statement
 - No investment tracking. That is [[Entry Expert]]'s job and mixing them would damage both
 - No web UI. Telegram is the entire interface
 - No other users, ever, under the current scale intent
@@ -43,7 +43,7 @@ Priorities are P0 (v1 cannot ship without it), P1 (v1 should have it), P2 (later
 | ID | Requirement | Pri | Acceptance |
 |---|---|---|---|
 | FR-1 | Bank alert emails reach the system via the dedicated forwarding inbox | P0 | An alert sent to Nat's Gmail appears at `/api/ingest` within 5 minutes |
-| FR-2 | Extract amount, direction, date, merchant, bank, account last-4 | P0 | Meets the accuracy thresholds set in SPIKE-01 |
+| FR-2 | Extract amount, direction, date, merchant, bank, account last-4. **Foreign-currency transactions also get spot-converted to SGD at ingest time**, using a free interbank/ECB rate — flagged as an estimate, never presented as final | P0 | Meets the accuracy thresholds set in SPIKE-01. A JPY/USD/etc. charge shows an SGD figure the same day, marked "estimated," rather than sitting unreported until a statement exists |
 | FR-3 | The same email can never create two transactions | P0 | Replaying an identical POST changes nothing. Enforced by DB constraint, not application logic |
 | FR-4 | **First sighting** of an email pattern — an unrecognised `(sender, subject)` pair, or a previously-working pattern whose parser now returns nothing — triggers a one-time Telegram triage message. It is never silently dropped and never silently assumed to be a transaction | P0 | Nat learns about a new or broken pattern the same day, not at month end, and exactly once per pattern — not once per email |
 | FR-20 | The triage message offers two actions: **Ignore this type** or **Needs parser** | P0 | See breakdown below |
@@ -63,6 +63,7 @@ Priorities are P0 (v1 cannot ship without it), P1 (v1 should have it), P2 (later
 | FR-11 | Description can be edited by replying to the message | P1 | Free text saved against the transaction |
 | FR-12 | Untagged transactions can be swept later via `/pending` | P1 | Missing a notification doesn't lose the transaction |
 | FR-21 | **Reduce action:** on any transaction — a refund, a partial reversal, cashback, anything that isn't a clean new expense — Nat can tap **Reduce a transaction** instead of categorising it. Shows a short list of recent transactions; picking one nets the current amount off that transaction's total | P0, Phase 3 | Confirmed by Nat 2026-08-16, in response to a real Trust partial-reversal pair found in SPIKE-01 samples (charge SGD 20.30, reversal SGD 0.30 two minutes later). Deliberately manual — no automatic reversal detection. See schema addition (`reduces_transaction_id`) in `ARCHITECTURE.md` |
+| FR-22 | **Amend SGD amount:** any foreign-currency transaction can have its SGD amount manually corrected — reply with the real figure once Nat checks the actual statement | P0, Phase 3 | Confirmed by Nat 2026-08-16: assume spot rate at ingest, amend later. The estimate is a starting point, not the record of truth — reports must be able to reflect the correction. See `sgd_amount_cents` / `fx_source` in `ARCHITECTURE.md` |
 
 ### 5.3 Reporting
 
@@ -70,7 +71,7 @@ Priorities are P0 (v1 cannot ship without it), P1 (v1 should have it), P2 (later
 |---|---|---|---|
 | FR-13 | `/today`, `/week`, `/month` return a summary on demand | P1 | Under 2 seconds |
 | FR-14 | A monthly report sends automatically on the 1st, covering the previous month in SGT | P1 | Totals, solo/joint split, category breakdown, top merchants, month-on-month change |
-| FR-15 | **Every report states how many transactions are untagged and how many were unparsed** | P0 | A report that hides its own incompleteness is worse than no report. This is what stops R1/R2 becoming silently wrong numbers |
+| FR-15 | **Every report states how many transactions are untagged, how many were unparsed, and how many carry an unconfirmed (spot-rate-estimated) FX conversion** | P0 | A report that hides its own incompleteness is worse than no report. This is what stops R1/R2, and now FX estimates (FR-22), becoming silently wrong numbers |
 | FR-16 | `/export` returns a CSV for a date range | P2 | Replaces the dump's Google Sheets archive entirely |
 
 ### 5.4 Deferred to Phase 5
