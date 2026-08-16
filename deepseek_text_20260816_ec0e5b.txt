@@ -1,0 +1,29 @@
+┌─────────────────┐
+│   Gmail Inbox   │
+└────────┬────────┘
+         │ IMAP Polling (every 5 mins)
+         ▼
+┌─────────────────┐      ┌──────────────────┐
+│  Email Scanner  │─────▶│    PostgreSQL    │
+│  (Render Worker)│      │     Database     │
+└────────┬────────┘      └────────┬─────────┘
+         │                         │
+         │ Transaction Detected    │
+         ▼                         │
+┌─────────────────┐               │
+│ Telegram Bot    │◀──────────────┘
+│ (Render Web)    │
+└────────┬────────┘
+         │
+         │ User Interaction
+         ▼
+┌─────────────────┐
+│  Categorized    │
+│  Transaction    │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│ Google Sheets   │
+│    Archive      │
+└─────────────────┘

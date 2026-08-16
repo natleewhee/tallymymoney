@@ -1,0 +1,7 @@
+[Idle] → [Transaction Detected] → [Awaiting Category]
+                                      ↓
+                              [Category Selected]
+                                      ↓
+                              [Awaiting Solo/Joint]
+                                      ↓
+                              [Transaction Complete]

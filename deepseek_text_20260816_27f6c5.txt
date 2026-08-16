@@ -1,0 +1,30 @@
+expense-tracker-bot/
+├── app.py                 # Main FastAPI application
+├── config.py              # Configuration management
+├── requirements.txt       # Python dependencies
+├── .env.example           # Environment variables template
+├── render.yaml            # Render deployment configuration
+├── README.md              # This file
+├── PRD.md                 # Product Requirements Document
+├── database/
+│   ├── __init__.py
+│   ├── models.py          # SQLAlchemy database models
+│   └── migrations/        # Database migration files
+├── services/
+│   ├── __init__.py
+│   ├── email_scanner.py   # Email scanning worker
+│   ├── telegram_bot.py    # Telegram bot handlers
+│   ├── transaction_processor.py  # Transaction processing logic
+│   ├── archive_service.py # Google Sheets integration
+│   └── report_generator.py # Monthly report generation
+├── utils/
+│   ├── __init__.py
+│   ├── parsers.py         # Email parsing for different banks
+│   ├── categories.py      # Category definitions and mappings
+│   └── helpers.py         # Utility functions
+├── tests/
+│   ├── __init__.py
+│   ├── test_email_scanner.py
+│   ├── test_telegram_bot.py
+│   └── test_parsers.py
+└── logs/                  # Application logs (gitignored)

@@ -1,0 +1,5 @@
+graph LR
+    A[Email Received] --> B[Scanner Polls Email]
+    B --> C[Parse Transaction]
+    C --> D[Save to Database]
+    D --> E[Send Telegram Notification]

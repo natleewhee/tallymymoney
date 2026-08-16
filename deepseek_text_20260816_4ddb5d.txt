@@ -1,0 +1,48 @@
+📊 *Monthly Expense Report - March 2024*
+
+━━━━━━━━━━━━━━━━━━━━
+💰 *TOTAL EXPENSES*
+━━━━━━━━━━━━━━━━━━━━
+💳 Total Spend: $1,847.50
+👤 Solo Expenses: $1,235.30 (67%)
+👥 Joint Expenses: $612.20 (33%)
+
+━━━━━━━━━━━━━━━━━━━━
+📂 *CATEGORY BREAKDOWN*
+━━━━━━━━━━━━━━━━━━━━
+*Solo Expenses:*
+🍔 Food & Dining: $345.20 (28%)
+🚗 Transport: $234.50 (19%)
+🛒 Groceries: $289.30 (23%)
+🎮 Entertainment: $156.70 (13%)
+💊 Healthcare: $89.60 (7%)
+📦 Others: $120.00 (10%)
+
+*Joint Expenses:*
+🍔 Food & Dining: $289.30 (47%)
+🏠 Household: $198.70 (32%)
+🚗 Transport: $124.20 (20%)
+
+━━━━━━━━━━━━━━━━━━━━
+📈 *TRANSACTION SUMMARY*
+━━━━━━━━━━━━━━━━━━━━
+📊 Total Transactions: 43
+✅ Processed: 38
+🚫 Ignored: 5
+💰 Income Matched: 3
+
+━━━━━━━━━━━━━━━━━━━━
+🏆 *TOP SPENDING*
+━━━━━━━━━━━━━━━━━━━━
+1. 🛒 NTUC FairPrice - $156.80
+2. 🍔 Grab Food - $89.40
+3. 🚗 Shell Petrol - $76.20
+
+━━━━━━━━━━━━━━━━━━━━
+💡 *MONTHLY INSIGHTS*
+━━━━━━━━━━━━━━━━━━━━
+📊 Spending increased 12% vs last month
+⚠️ Entertainment spending above average
+✅ Groceries under budget by 8%
+
+*Generated on Apr 1, 2024*

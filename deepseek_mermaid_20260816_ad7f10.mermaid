@@ -1,0 +1,5 @@
+graph LR
+    A[Income Detected] --> B[Show Last 5 Expenses]
+    B --> C{User Selects}
+    C -->|Match| D[Link Transactions]
+    C -->|Skip| E[Mark as Regular Income]

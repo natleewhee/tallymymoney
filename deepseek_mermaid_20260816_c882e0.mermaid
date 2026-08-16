@@ -1,0 +1,6 @@
+graph LR
+    A[Telegram Message] --> B{User Choice}
+    B -->|Solo| C[Mark as Solo]
+    B -->|Joint| D[Mark as Joint]
+    B -->|Edit| E[Edit Description]
+    B -->|Ignore| F[Archive as Ignored]
