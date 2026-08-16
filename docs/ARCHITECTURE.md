@@ -59,6 +59,8 @@ Every 5 minutes: read unprocessed threads, POST raw subject + body + `Message-ID
 ### `/api/ingest`
 Verify secret → identify bank by sender → parse → insert with `Message-ID` idempotency → send Telegram notification. **A parse that yields nothing still sends a Telegram message** ("couldn't read this one"). Silent failure is the failure mode that hurts — see R3.
 
+**Unrecognised-pattern triage (FR-4/FR-20).** Before parsing, look up `(sender, subject)` in `sender_rules`. A hit with `action = 'ignore'` archives the email — no Telegram message, no row anywhere. A hit with `action = 'needs_parser'` inserts into `unclassified_emails` and stops there — no repeat alert for a pattern already queued. No hit at all means this `(sender, subject)` pair has never been seen: insert into `unclassified_emails` with `status = 'pending_review'` and send a one-time Telegram triage message with two buttons, **Ignore this type** and **Needs parser**, either of which writes the `sender_rules` row so the decision is made once per pattern, not once per email. Confirmed viable by real DBS/UOB/Trust/Citibank samples in `SPIKE-01-RESULTS.md`, where distinct transaction types reliably carry distinct, stable subject lines from the same sending address — `(sender, subject)` is a real fingerprint, not a guess. (One DBS subject, `"iBanking Alerts"`, may turn out not to be unique — flagged there, not yet resolved.)
+
 ### `/api/telegram`
 Webhook for button callbacks and slash commands. Sub-second work only.
 
@@ -71,25 +73,35 @@ Trimmed hard from `ideation-archive/schema-full.sql`. Single user, so no `users`
 
 ```sql
 CREATE TABLE transactions (
-  id                  SERIAL PRIMARY KEY,
-  email_message_id    TEXT UNIQUE NOT NULL,   -- idempotency, enforced by the DB
-  amount_cents        BIGINT NOT NULL,        -- integers, never floats
-  currency            CHAR(3) NOT NULL DEFAULT 'SGD',
-  direction           TEXT NOT NULL CHECK (direction IN ('debit','credit')),
-  merchant_raw        TEXT,                   -- exactly as the bank wrote it
-  merchant_normalised TEXT,                   -- what drives memory and reports
-  description         TEXT,
-  category            TEXT,
-  split               TEXT CHECK (split IN ('solo','joint','ignored')),
-  bank                TEXT NOT NULL,
-  account_last4       TEXT,
-  occurred_at         TIMESTAMPTZ NOT NULL,
-  status              TEXT NOT NULL DEFAULT 'pending'
-                        CHECK (status IN ('pending','tagged','ignored','unparsed')),
-  raw_email           TEXT,                   -- kept: the only way to fix a bad parse
-  telegram_message_id BIGINT,
-  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  tagged_at           TIMESTAMPTZ
+  id                    SERIAL PRIMARY KEY,
+  email_message_id      TEXT UNIQUE NOT NULL,   -- idempotency, enforced by the DB
+  amount_cents          BIGINT NOT NULL,        -- integers, never floats. Every row here
+                                                 -- parsed successfully — see unclassified_emails
+                                                 -- below for anything that didn't
+  currency              CHAR(3) NOT NULL DEFAULT 'SGD',
+  direction              TEXT NOT NULL CHECK (direction IN ('debit','credit')),
+  merchant_raw          TEXT,                   -- exactly as the bank wrote it
+  merchant_normalised   TEXT,                   -- what drives memory and reports
+  description           TEXT,
+  category               TEXT,
+  split                  TEXT CHECK (split IN ('solo','joint','ignored')),
+  bank                   TEXT NOT NULL,
+  account_identifier     TEXT,                  -- usually a last-4; a bank that never gives
+                                                 -- one (Trust) gets the card/product name
+                                                 -- instead, e.g. "Freedom" — confirmed
+                                                 -- sufficient by Nat for a single-card setup
+  occurred_at            TIMESTAMPTZ NOT NULL,
+  status                 TEXT NOT NULL DEFAULT 'pending'
+                          CHECK (status IN ('pending','tagged','ignored')),
+  reduces_transaction_id INT REFERENCES transactions(id),  -- FR-21: set when this row is a
+                                                 -- manually-tagged refund/reversal against an
+                                                 -- earlier row. Reporting nets it off the
+                                                 -- referenced transaction and excludes this
+                                                 -- row from independent totals
+  raw_email              TEXT,                  -- kept: the only way to fix a bad parse
+  telegram_message_id    BIGINT,
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  tagged_at              TIMESTAMPTZ
 );
 
 -- merchant memory: the feature that keeps tagging to one tap
@@ -101,18 +113,45 @@ CREATE TABLE merchant_rules (
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_tx_occurred ON transactions (occurred_at DESC);
-CREATE INDEX idx_tx_status   ON transactions (status) WHERE status = 'pending';
+-- FR-4/FR-20: anything that didn't become a transaction — an unrecognised
+-- (sender, subject) pair, or a previously-working pattern that returned nothing this time
+CREATE TABLE unclassified_emails (
+  id                SERIAL PRIMARY KEY,
+  email_message_id  TEXT UNIQUE NOT NULL,
+  sender            TEXT NOT NULL,
+  subject           TEXT,
+  raw_email         TEXT NOT NULL,
+  status            TEXT NOT NULL DEFAULT 'pending_review'
+                      CHECK (status IN ('pending_review','ignored','needs_parser')),
+  received_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- FR-20a/FR-20b: Nat's one-time classification of a (sender, subject) pattern,
+-- applied to every future email matching it
+CREATE TABLE sender_rules (
+  sender      TEXT NOT NULL,
+  subject     TEXT NOT NULL,
+  action      TEXT NOT NULL CHECK (action IN ('ignore', 'needs_parser')),
+  note        TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (sender, subject)
+);
+
+CREATE INDEX idx_tx_occurred    ON transactions (occurred_at DESC);
+CREATE INDEX idx_tx_status      ON transactions (status) WHERE status = 'pending';
+CREATE INDEX idx_unclassified   ON unclassified_emails (status) WHERE status != 'ignored';
 ```
 
-Four deliberate departures from the dump:
+Deliberate departures from the dump:
 
 - **`amount_cents BIGINT`, not `DECIMAL`.** Integer cents removes a whole class of rounding argument, and nothing here needs fractional cents.
 - **`raw_email` retained.** When a parser turns out to be wrong three weeks in, this is the difference between reprocessing the history and losing it.
 - **`merchant_raw` and `merchant_normalised` kept separate.** The bank's string is evidence; the normalised one is a derived guess and will need re-deriving.
-- **`status = 'unparsed'`** is a real state. An email that arrived and could not be read is data, not an absence.
+- **A row only ever reaches `transactions` if it parsed successfully.** An earlier version of this schema put `'unparsed'` in `transactions.status`, which quietly contradicted `amount_cents NOT NULL` — there is no real amount to store for an email that failed to parse. Fixed by moving that state out entirely: `unclassified_emails` holds anything that isn't a clean transaction — an unrecognised `(sender, subject)` pair or a previously-working pattern that returned nothing — and `sender_rules` holds Nat's one-time Ignore/Needs-parser decision per pattern (FR-4/FR-20). An email that arrived and could not be turned into a transaction is still data; it just isn't a `transactions` row.
+- **`account_identifier`, not `account_last4`.** Trust's alerts never include a last-4, only the card product name. Confirmed by Nat as sufficient for a single-card setup — the column stores whichever the bank actually gives.
+- **`reduces_transaction_id` (FR-21), narrower than the dropped `matched_transaction_id`.** A manual "this refund/reversal reduces that earlier transaction" link, picked from a short recent list — not full income matching. Added directly from a real Trust partial-reversal pair found in the SPIKE-01 samples; confirmed by Nat 2026-08-16 as the whole solution wanted here, deliberately simpler than automatic detection.
 
-Dropped from the dump: `users`, `email_credentials_encrypted`, `archived_to_sheets`, `monthly_summaries` (derivable on demand at this volume), `matched_transaction_id` (deferred with income matching to Phase 5).
+Dropped from the dump: `users`, `email_credentials_encrypted`, `archived_to_sheets`, `monthly_summaries` (derivable on demand at this volume). `matched_transaction_id` — the *general* income-matching case (one payment settling several expenses, or anything outside `reduces_transaction_id`'s short recent list) — stays deferred to Phase 5 as FR-17.
 
 ## 5. Stack choices
 

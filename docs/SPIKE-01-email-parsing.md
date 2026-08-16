@@ -56,13 +56,13 @@ Search the mailbox for the last 90 days across every bank Nat holds.
 
 | Bank / card | Alert emails found (90d) | Per-transaction? | Threshold in force | Notes |
 |---|---|---|---|---|
-| DBS | not yet searched | **yes**, confirmed by sample — 2 sub-types seen (PayLah, card) | unknown | Two distinct sending addresses, same structured format. See `SPIKE-01-RESULTS.md` |
+| DBS | not yet searched | **yes**, confirmed by sample — 4 sub-types seen (PayLah spend, card spend, PayNow received, PayNow sent) | unknown | One template family across sub-types; HTML-only for two of the four, no plain-text part. See `SPIKE-01-RESULTS.md` |
 | UOB | not yet searched | **yes**, confirmed by sample — card spend + PayNow received | unknown | One sending address for both alert types |
-| Citibank | not yet searched | unknown — no sample yet | unknown | |
-| Trust | not yet searched | **yes**, confirmed by sample — spend + partial reversal | unknown | No card last-4 in the alert body, only card product name — see risk in `SPIKE-01-RESULTS.md` |
-| Amex | not yet searched | unknown — no sample yet | unknown | |
+| Citibank | not yet searched | **yes**, confirmed by sample — card spend (foreign currency) | unknown | Domain guess was correct on the first sample. That sample carries no SGD amount — a live open question, see `SPIKE-01-RESULTS.md` |
+| Trust | not yet searched | **yes**, confirmed by sample — spend + partial reversal | unknown | No card last-4 in the alert body, only card product name ("Freedom") — resolved as a non-issue by Nat, single-card setup |
+| Amex | not yet searched | unknown — no sample yet | unknown | The one bank in scope with zero evidence |
 
-**"Not yet searched" is the operative gap.** Six forwarded samples from 2026-08-16 confirm DBS/UOB/Trust *can* send parseable per-transaction alerts, and are strong evidence for Step 3–4 (format, extraction). They say nothing about *coverage* — whether every transaction produces one. That still needs the actual 90-day search and the Step 2 statement cross-check below. Citibank and Amex remain completely unvalidated: no sample has been seen from either.
+**"Not yet searched" is the operative gap.** Nine forwarded samples from 2026-08-16 confirm DBS/UOB/Trust/Citibank *can* send parseable per-transaction alerts, and are strong evidence for Steps 3–4 (format, extraction). They say nothing about *coverage* — whether every transaction produces one. That still needs the actual 90-day search and the Step 2 statement cross-check below. Amex remains completely unvalidated: no sample has been seen.
 
 Classify each sender: **per-transaction alert** / statement / marketing / security notice. Only the first category matters.
 

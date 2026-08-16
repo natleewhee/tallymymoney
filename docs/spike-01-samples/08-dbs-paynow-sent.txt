@@ -1,0 +1,39 @@
+From: ibanking.alert@dbs.com (via Amazon SES on behalf of dbs.com)
+Subject: iBanking Alerts
+Format: HTML only — no plain-text MIME part
+Captured: 2026-08-16, transaction occurred 2026-07-04 (raw original, not a
+Gmail-forwarded copy)
+
+---
+
+Dear Customer,
+We refer to your PAYNOW dated 04 Jul. We are pleased to confirm that the
+transaction was completed.
+
+Date & Time: 04 Jul 22:21 (SGT)
+Amount: SGD30.00
+From: DBS Multiplier Account A/C ending XXXX
+To: SHAXX LOX ZHX QUXX (MOBILE ending XXXX)
+
+If unauthorised, please call our DBS hotline. To view transaction details,
+please login to digibank.
+
+---
+
+Extracted:
+  direction: debit
+  amount: SGD 30.00
+  account_last4: XXXX (Nat's own account; redacted here)
+  occurred_at: 2026-07-04 22:21 SGT
+  merchant/counterparty: "SHAXX LOX ZHX QUXX" — DBS itself partially masks
+    the outgoing PayNow recipient's name with X-substitution before it
+    ever reaches the email. Not a redaction I applied — this is DBS's own
+    privacy behaviour on the live data.
+
+Note: a fourth distinct DBS subject line ("iBanking Alerts", generic and
+reused — the actual transaction type is only knowable from the body, not
+the subject alone for this one). This slightly complicates the
+(sender, subject) fingerprint idea from 07: "iBanking Alerts" may not be
+unique to PayNow-sent if DBS reuses that subject for other notification
+types too. Worth confirming with more samples before assuming the subject
+alone disambiguates this one.
