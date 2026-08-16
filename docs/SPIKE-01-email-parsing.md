@@ -19,6 +19,8 @@ The spike must separate these, because the response to each is completely differ
 
 `ideation-archive/bank_patterns.py` and `email_scanner.py` contain confident-looking regexes for DBS, OCBC and Citibank. They were generated, not observed. Building on them would mean discovering the product's core assumption is wrong *after* the schema, the bot and the deployment already exist.
 
+**Banks in scope, confirmed by Nat 2026-08-16: DBS, UOB, Citibank, Trust, Amex.** OCBC is not a Nat account and drops out of scope; Trust and Amex are added below, neither of which the ideation dump ever considered.
+
 The cost of being wrong here is a week. The cost of being wrong in Phase 4 is the project.
 
 ---
@@ -26,6 +28,18 @@ The cost of being wrong here is a week. The cost of being wrong in Phase 4 is th
 ## Step 0 — Switch the alerts on (do this today)
 
 This is a prerequisite, not part of the measurement, and it gates the whole timeline.
+
+### 0a — Create the dedicated inbox
+
+Yes, a separate address is needed — this is what makes D2 safe. Recommend a plain free Gmail account rather than an alias, since Apps Script (§0c) needs to run *as* the account that owns the mailbox, and a `+alias` on the existing Gmail doesn't give that.
+
+- [ ] Create a new Gmail account, e.g. `tallymymoneyalerts@gmail.com` (name doesn't matter, only Nat and the banks ever see it)
+- [ ] In the **main** Gmail — Settings → **Forwarding and POP/IMAP** → *Add a forwarding address* → enter the new address
+- [ ] Gmail sends a confirmation code to the new address. Log into it, retrieve the code, paste it back into the main account's forwarding settings to confirm
+- [ ] In the main Gmail, create a **filter**: `from:(<bank domains>)` → *Forward to* the new address, and **Skip Inbox (Archive it)** so alert mail doesn't clutter the real inbox but stays retrievable there too. Do **not** select Delete — the main inbox stays the backup copy
+- [ ] The new account is where SPIKE-01's later inventory step runs, and later where the Apps Script trigger lives
+
+### 0b — Enable alerts, per bank
 
 For each bank, in ibanking/app notification settings:
 
@@ -43,9 +57,10 @@ Search the mailbox for the last 90 days across every bank Nat holds.
 | Bank / card | Alert emails found (90d) | Per-transaction? | Threshold in force | Notes |
 |---|---|---|---|---|
 | DBS | | | | |
-| OCBC | | | | |
 | UOB | | | | |
-| *(others — confirm the real list)* | | | | |
+| Citibank | | | | |
+| Trust | | | | |
+| Amex | | | | |
 
 Classify each sender: **per-transaction alert** / statement / marketing / security notice. Only the first category matters.
 

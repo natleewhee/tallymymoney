@@ -29,7 +29,7 @@ D1 means TallyMyMoney is **not** the "ship something publicly" goal in `Home.md`
 
 > **Do Nat's banks actually send a parseable email for every transaction?**
 
-Everything else — the bot, the schema, the reports — is ordinary work. This is not. If DBS/OCBC/UOB only alert above a threshold, only for card-not-present, or push to their app instead of email, the product has no input and no amount of good engineering fixes it.
+Everything else — the bot, the schema, the reports — is ordinary work. This is not. If DBS/UOB/Citibank/Trust/Amex only alert above a threshold, only for card-not-present, or push to their app instead of email, the product has no input and no amount of good engineering fixes it.
 
 The ideation dump contains regex patterns for DBS, OCBC and Citibank. **Those patterns were invented by a language model, not observed from real email.** They are worth exactly nothing as evidence.
 
@@ -80,7 +80,7 @@ Phase 1's wall-clock is longer than its work because **the evidence may not exis
 | # | Risk | Severity | Mitigation |
 |---|---|---|---|
 | R1 | **Alert coverage gap** — banks don't email every transaction | **Kill** | SPIKE-01 measures it before anything is built. Explicit go/no-go threshold |
-| R2 | **No manual-entry fallback was selected.** Cash spending, un-alerted transactions, and anything below an alert threshold are invisible — and the monthly report will silently understate every month | High | *Recommend adding a plain-text quick-entry command in Phase 3* (`"12.50 kopi"` → parsed). Cheap to build, and it is the only defence against R1 turning into permanently wrong numbers. Flagged for Nat's call |
+| R2 | Cash spending and anything below an alert threshold are invisible to email capture alone | High | **Resolved.** Manual quick-entry (`"12.50 kopi"` → parsed) is committed P1 scope for Phase 3 — confirmed by Nat 2026-08-16. Only defence against R1 turning into permanently wrong numbers |
 | R3 | **Parser drift** — a bank changes its email template and extraction silently returns nothing | High | Any forwarded mail that yields no transaction fires a Telegram "couldn't parse this" alert. Never fail silently |
 | R4 | **Duplicates** — a re-forwarded or re-delivered email double-counts | Medium | `Message-ID` unique constraint at the DB level, not in application logic |
 | R5 | **Free-tier behaviour** — Vercel Hobby cron runs daily, not every 5 minutes | Medium | Scheduling lives in Apps Script, not Vercel Cron. The daily Vercel cron only no-ops until the 1st of the month. Designed around, not fought |
@@ -105,12 +105,16 @@ Approving this document authorises **Phase 1 only** — switching on bank alerts
 
 That is a real possible outcome and it would be a good one: a week spent learning the input doesn't exist beats three months building a bot with nothing to parse.
 
-## 10. Open questions for Nat
+## 10. Open questions — resolved 2026-08-16
 
-1. **Which banks and cards?** The dump names DBS, OCBC, UOB, Citibank. What does Nat actually hold — including Trust, GXS, Amex, Revolut, or anything else?
-2. **R2 — add manual quick-entry?** Recommend yes, in Phase 3.
-3. **Categories** — is the dump's eight-category list right, or does it need Singapore-specific splits (transport → Grab/public/COE/petrol, for instance)?
-4. **Does the partner ever need to *see* anything?** D4 says they don't touch the bot; a read-only monthly summary forwarded to them is a different and much cheaper question.
+| # | Question | Answer |
+|---|---|---|
+| 1 | Which banks and cards? | **DBS, UOB, Citibank, Trust, Amex.** Not OCBC — updated everywhere below and in `SPIKE-01-email-parsing.md` |
+| 2 | Add manual quick-entry (R2)? | **Yes.** Promoted from "recommended" to committed P1 scope, Phase 3. See §7, R2 |
+| 3 | Categories | **Start with the generic eight** from `ideation-archive/categories.py`. No Singapore-specific splits for v1 |
+| 4 | Does the partner see anything? | **On-demand only.** A `/partner` command (or similar) generates a read-only summary when Nat asks for it. No automatic send, no standing access — see FR-19 in `PRD.md` |
+
+No open questions remain before SPIKE-01. Step 0 of the spike — creating the dedicated forwarding inbox and switching on alerts for these five banks — is the next action.
 
 ---
 

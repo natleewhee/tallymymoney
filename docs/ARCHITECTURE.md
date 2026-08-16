@@ -7,7 +7,7 @@
 ## 1. Shape
 
 ```
-   Bank (DBS / OCBC / UOB / …)
+   Bank (DBS / UOB / Citibank / Trust / Amex)
         │  transaction alert email
         ▼
    Nat's Gmail ──── filter: forward + archive ────┐
@@ -51,7 +51,7 @@ The IMAP path stays viable as a fallback if Apps Script proves awkward — a Git
 ## 3. Components
 
 ### Gmail filter (Nat's account)
-`from:(dbs.com.sg OR ocbc.com OR uobgroup.com …)` → forward to the dedicated address, skip inbox, apply label. Forwarding addresses need one-time verification.
+`from:(dbs.com.sg OR uobgroup.com OR citibank.com.sg OR trustbank.sg OR americanexpress.com)` → forward to the dedicated address, skip inbox, apply label. **These domains are a starting guess, not a verified fact** — SPIKE-01 Step 1 confirms the real sending addresses from actual alert mail before the filter is finalised; see §3 of `STRATEGY.md` on why invented specifics are the risk here. Forwarding addresses need one-time verification.
 
 ### Apps Script (dedicated account)
 Every 5 minutes: read unprocessed threads, POST raw subject + body + `Message-ID` to `/api/ingest` with a shared secret header, then label as sent. Deliberately dumb — **no parsing here.** Parsing belongs in the app where it is version-controlled and testable.

@@ -74,15 +74,21 @@ Priorities are P0 (v1 cannot ship without it), P1 (v1 should have it), P2 (later
 | ID | Requirement | Note |
 |---|---|---|
 | FR-17 | Match an incoming payment to prior expenses | The dump's "show last 5 expenses" fails on partial repayments, one payment settling several expenses, and anything older than a few days. Needs a real design before it is worth building |
-| FR-18 | Manual quick-entry (`"12.50 kopi"`) | **Recommended to promote to P1.** Without it, cash and below-threshold spending are permanently invisible — see R2 in `STRATEGY.md`. Awaiting Nat's call |
+
+### 5.5 Manual entry and partner visibility — confirmed 2026-08-16
+
+| ID | Requirement | Pri | Acceptance |
+|---|---|---|---|
+| FR-18 | Manual quick-entry: a free-text message (`"12.50 kopi"`) is parsed into a transaction the same as an email-derived one | **P1**, Phase 3 | Without this, cash and below-alert-threshold spending are permanently invisible and every monthly total silently understates. Promoted from "recommended" to committed scope — confirmed by Nat, see R2 in `STRATEGY.md` |
+| FR-19 | A partner-facing summary generates **only on request** — a command such as `/partner` — never automatically | P1, Phase 4 | No standing access, no scheduled send to the partner. D4 still holds: they never interact with the bot directly. Nat asks, Nat forwards (or the bot sends to a second chat Nat specifies at call time) |
 
 ## 6. Categories
 
-Starting set, carried from `ideation-archive/categories.py` and open to revision:
+**Confirmed 2026-08-16: start with the generic eight**, carried from `ideation-archive/categories.py`, no Singapore-specific splits for v1:
 
 `Food & Dining` · `Groceries` · `Transport` · `Household` · `Utilities` · `Healthcare` · `Entertainment` · `Shopping` · `Other`
 
-Open question: whether Singapore-specific splits earn their place — separating Grab / public transport / petrol / parking under Transport, for instance. More categories means more taps on first sighting but a sharper report. Recommend starting narrow and splitting only when a category actually gets too coarse to be useful.
+Splitting a category (Transport → Grab/public/petrol/parking, for instance) is a live option once one of these proves too coarse in practice — not a v1 decision.
 
 ## 7. Non-functional
 
