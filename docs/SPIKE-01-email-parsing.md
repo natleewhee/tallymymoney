@@ -1,6 +1,6 @@
 # SPIKE-01 — Can bank alert emails carry this product?
 
-**Status:** not started · **Blocks:** everything · **Effort:** ~1 day of work, ~2 weeks wall-clock
+**Status:** in progress — Step 0 done (dedicated inbox live, first alerts forwarding), Steps 3–4 have early evidence, Steps 1–2 (coverage) not started · **Blocks:** everything · **Effort:** ~1 day of work, ~2 weeks wall-clock
 
 ---
 
@@ -56,11 +56,13 @@ Search the mailbox for the last 90 days across every bank Nat holds.
 
 | Bank / card | Alert emails found (90d) | Per-transaction? | Threshold in force | Notes |
 |---|---|---|---|---|
-| DBS | | | | |
-| UOB | | | | |
-| Citibank | | | | |
-| Trust | | | | |
-| Amex | | | | |
+| DBS | not yet searched | **yes**, confirmed by sample — 2 sub-types seen (PayLah, card) | unknown | Two distinct sending addresses, same structured format. See `SPIKE-01-RESULTS.md` |
+| UOB | not yet searched | **yes**, confirmed by sample — card spend + PayNow received | unknown | One sending address for both alert types |
+| Citibank | not yet searched | unknown — no sample yet | unknown | |
+| Trust | not yet searched | **yes**, confirmed by sample — spend + partial reversal | unknown | No card last-4 in the alert body, only card product name — see risk in `SPIKE-01-RESULTS.md` |
+| Amex | not yet searched | unknown — no sample yet | unknown | |
+
+**"Not yet searched" is the operative gap.** Six forwarded samples from 2026-08-16 confirm DBS/UOB/Trust *can* send parseable per-transaction alerts, and are strong evidence for Step 3–4 (format, extraction). They say nothing about *coverage* — whether every transaction produces one. That still needs the actual 90-day search and the Step 2 statement cross-check below. Citibank and Amex remain completely unvalidated: no sample has been seen from either.
 
 Classify each sender: **per-transaction alert** / statement / marketing / security notice. Only the first category matters.
 
@@ -98,6 +100,8 @@ Ten emails per bank, spread across the full 90 days.
 
 Merchant quality is the one most likely to disappoint. Plan for a normalisation layer regardless.
 
+**Early evidence, six samples, 2026-08-16:** see `SPIKE-01-RESULTS.md` for the full breakdown. Headline — DBS uses a stable structured key-value format across two sub-brands; UOB and Trust use single-sentence prose, consistent within each bank but different from each other; Trust's HTML-to-text conversion introduces irregular whitespace in the merchant string, confirming the normalisation layer is not optional. Ten-per-bank sampling across the full 90 days is still needed before this step can be marked done.
+
 ## Step 4 — Extraction accuracy
 
 Write throwaway parsers. Throwaway is the point — this is measurement, not the product.
@@ -129,9 +133,9 @@ Write the verdict, with the evidence table, into `docs/SPIKE-01-RESULTS.md`. Inc
 
 ## Deliverables
 
-- [ ] Step 0 completed, per-bank alert settings recorded
-- [ ] `SPIKE-01-RESULTS.md` — inventory, coverage table, stability notes, accuracy table, verdict
-- [ ] A sanitised corpus of sample emails, amounts and account numbers redacted, kept as parser test fixtures
+- [x] Dedicated inbox created and receiving forwarded mail (`nattytallymonny@gmail.com`) — auto-forward filter and per-bank alert threshold settings still to be recorded
+- [~] `SPIKE-01-RESULTS.md` — started, early format/extraction evidence recorded; coverage table, full inventory and verdict still open
+- [~] Sanitised corpus — 6 fixtures in `spike-01-samples/`, account numbers redacted, amounts kept (needed for accuracy testing, a deliberate deviation from "redacted" — see the file headers for why)
 - [ ] A recommendation on D2: does the forward-to-dedicated-address route survive contact with reality?
 
 ## Out of scope

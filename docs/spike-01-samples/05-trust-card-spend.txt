@@ -1,0 +1,34 @@
+From: from_us@trustbank.sg
+Subject: Yay! Transaction successful
+Format: HTML + plain text (both present, plain text used here)
+Captured: 2026-08-16 (transaction occurred 2026-08-16)
+
+---
+
+Didn't do this? Please contact us via your Trust App.
+
+You've spent SGD 20.30 at Cabcharge Asia Pte Ltd SINGAPORE SG on 16 Aug
+2026 12:45SGT with Freedom credit card. You'll receive estimated S$0.20
+cashback*. Not you? Alert us via the Trust App.
+
+*T&Cs apply.
+
+---
+
+Extracted:
+  direction: debit
+  amount: SGD 20.30
+  account_identifier: "Freedom credit card" — product name only, NO last-4
+  occurred_at: 2026-08-16 12:45 SGT
+  merchant: "Cabcharge Asia Pte Ltd SINGAPORE SG" — HTML source has irregular
+            multi-space runs between tokens ("Ltd   SINGAPORE    SG"),
+            collapsed here for readability. A real parser must normalise
+            whitespace before using this string.
+
+Risk: no card/account last-4 anywhere in the body — only the card
+*product* name. If Nat ever holds two Trust cards of the same product,
+the alert alone cannot tell them apart. Not a blocker for a single-card
+setup; worth remembering if that changes.
+
+See also 06-trust-partial-reversal.txt — the same merchant, same
+timestamp, a follow-up email reversing SGD 0.30 of this SGD 20.30 charge.

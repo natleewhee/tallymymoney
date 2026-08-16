@@ -51,7 +51,7 @@ The IMAP path stays viable as a fallback if Apps Script proves awkward — a Git
 ## 3. Components
 
 ### Gmail filter (Nat's account)
-`from:(dbs.com.sg OR uobgroup.com OR citibank.com.sg OR trustbank.sg OR americanexpress.com)` → forward to the dedicated address, skip inbox, apply label. **These domains are a starting guess, not a verified fact** — SPIKE-01 Step 1 confirms the real sending addresses from actual alert mail before the filter is finalised; see §3 of `STRATEGY.md` on why invented specifics are the risk here. Forwarding addresses need one-time verification.
+`from:(dbs.com OR uobgroup.com OR citibank.com.sg OR trustbank.sg OR americanexpress.com)` → forward to the dedicated address, skip inbox, apply label. **DBS, UOB and Trust are confirmed against real forwarded samples** (see `SPIKE-01-RESULTS.md`) — `dbs.com` replaces an earlier guess of `dbs.com.sg`, which turned out wrong, exactly the failure mode described in §3 of `STRATEGY.md`. Citibank and Amex domains are still unconfirmed guesses pending samples. Forwarding addresses need one-time verification.
 
 ### Apps Script (dedicated account)
 Every 5 minutes: read unprocessed threads, POST raw subject + body + `Message-ID` to `/api/ingest` with a shared secret header, then label as sent. Deliberately dumb — **no parsing here.** Parsing belongs in the app where it is version-controlled and testable.

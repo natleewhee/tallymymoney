@@ -11,7 +11,8 @@ A personal Telegram bot that reads Singapore bank transaction-alert emails, asks
 | Document | What it is |
 |---|---|
 | [`docs/STRATEGY.md`](docs/STRATEGY.md) | **Start here.** Locked decisions, the critical path, phasing, what was cut and why, live risks |
-| [`docs/SPIKE-01-email-parsing.md`](docs/SPIKE-01-email-parsing.md) | The go/no-go validation. The only sanctioned task right now |
+| [`docs/SPIKE-01-email-parsing.md`](docs/SPIKE-01-email-parsing.md) | The go/no-go validation. The only sanctioned task right now — in progress |
+| [`docs/SPIKE-01-RESULTS.md`](docs/SPIKE-01-RESULTS.md) | Early evidence from real forwarded samples. Not a verdict yet |
 | [`docs/PRD.md`](docs/PRD.md) | What it does, scoped to one user |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Target design, data model, stack |
 | [`ideation-archive/`](ideation-archive/) | The original DeepSeek ideation dump, preserved |

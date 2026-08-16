@@ -1,0 +1,32 @@
+From: paylah.alert@dbs.com
+Subject: Transaction Alerts
+Format: HTML + plain text (both present, plain text used here)
+Captured: 2026-08-16 (transaction occurred 2026-08-16)
+
+---
+
+Transaction Ref: PLPE4622810132299437
+
+Dear Sir / Madam,
+We refer to your PayLah! Scan & Pay Transfer dated 16 Aug. We are pleased
+to confirm that the transaction was completed.
+
+Date & Time: 16 Aug 12:43 (SGT)
+Amount: SGD10.60
+From: PayLah! Wallet (Mobile ending XXXX)
+To: HENG LONG T/P(246)
+
+---
+
+Extracted:
+  direction: debit
+  amount: SGD 10.60
+  account_last4: XXXX (redacted; was 4 digits, a mobile number not a card)
+  occurred_at: 2026-08-16 12:43 SGT
+  merchant: HENG LONG T/P(246)
+  transaction_ref: PLPE4622810132299437
+
+Note: consistent "Date & Time: / Amount: / From: / To:" key-value block,
+present identically in both the plain-text and HTML parts (the HTML wraps
+it in a <table>). This is the most reliably parseable format in the
+corpus so far.
