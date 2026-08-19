@@ -27,6 +27,20 @@ bot.use(async (ctx, next) => {
   await next();
 });
 
+/** Confirmed 2026-08-19: Nat wants a plain-language summary after tagging,
+ * not a bare "Category · Split" label — e.g. "$20.30 paid at Cabcharge
+ * Asia (Joint)". */
+function describeTagged(
+  tx: { sgdAmountCents: number; merchantRaw: string | null; direction: string },
+  split: "solo" | "joint",
+): string {
+  const amount = `$${(tx.sgdAmountCents / 100).toFixed(2)}`;
+  const who = tx.merchantRaw ?? "unknown";
+  const splitLabel = split === "solo" ? "Solo" : "Joint";
+  const verb = tx.direction === "debit" ? "paid at" : "received from";
+  return `✅ ${amount} ${verb} ${who} (${splitLabel})`;
+}
+
 async function markTagged(txId: number, category: string, split: "solo" | "joint") {
   const [tx] = await db.select().from(transactions).where(eq(transactions.id, txId));
   if (!tx) return;
@@ -74,7 +88,7 @@ bot.on("callback_query:data", async (ctx) => {
           return;
         }
         await markTagged(Number(txId), tx.category, split as "solo" | "joint");
-        await ctx.editMessageText(`✅ Tagged: ${tx.category} · ${split === "solo" ? "Solo" : "Joint"}`);
+        await ctx.editMessageText(describeTagged(tx, split as "solo" | "joint"));
         await ctx.answerCallbackQuery("Tagged");
         return;
       }
@@ -92,7 +106,7 @@ bot.on("callback_query:data", async (ctx) => {
         }
         if (rule.defaultSplit) {
           await markTagged(Number(txId), rule.category, rule.defaultSplit as "solo" | "joint");
-          await ctx.editMessageText(`✅ Tagged: ${rule.category} · ${rule.defaultSplit === "solo" ? "Solo" : "Joint"}`);
+          await ctx.editMessageText(describeTagged(tx, rule.defaultSplit as "solo" | "joint"));
         } else {
           await db.update(transactions).set({ category: rule.category }).where(eq(transactions.id, Number(txId)));
           await ctx.editMessageReplyMarkup({ reply_markup: splitKeyboard(Number(txId)) });
@@ -192,7 +206,7 @@ bot.on("callback_query:data", async (ctx) => {
             set: { action: "needs_parser" },
           });
         await db.update(unclassifiedEmails).set({ status: "needs_parser" }).where(eq(unclassifiedEmails.id, Number(uneId)));
-        await ctx.editMessageText("🔧 Queued — won't alert again until this is fixed");
+        await ctx.editMessageText("🔧 Queued — won't alert again until this is fixed. Look for 🔴 tallymymoney-needs-parser in Gmail in a few minutes to find and forward it on.");
         await ctx.answerCallbackQuery("Queued");
         return;
       }

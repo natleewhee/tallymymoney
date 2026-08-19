@@ -1,0 +1,33 @@
+From: from_us@trustbank.sg
+Subject: Yay! Overseas transaction successful
+Format: HTML only — no plain-text MIME part
+Captured: 2026-08-19, transaction occurred 2026-08-19 (raw original)
+
+---
+
+0% FX fees! You've spent CNY 1025.88 using Freedom credit card at
+WEIXIN*Shanghai Pala     ShenZhen     CN on 19 Aug 2026 10:01SGT. You'll
+receive estimated S$0.97 and up to 15% bonus cashback*. Not you? Alert us
+via Trust App.
+
+*T&Cs apply.
+
+---
+
+Extracted:
+  direction: debit
+  amount: CNY 1025.88 — foreign currency, spot-converted per FR-2/FR-22
+  account_identifier: "Freedom" — card product name, no last-4 (consistent
+    with every other Trust sample)
+  occurred_at: 2026-08-19 10:01 SGT
+  merchant: "WEIXIN*Shanghai Pala ShenZhen CN" — WeChat Pay acquirer
+            prefix, same whitespace-run irregularity as prior samples
+
+Note: a THIRD Trust template, distinct word order from domestic spend —
+"You've spent {CCY} {amount} using {card} credit card at {merchant}"
+vs domestic's "You've spent SGD {amount} at {merchant} ... with {card}
+card." Confirms Trust's overseas and domestic notifications are genuinely
+different templates, not just a currency substitution in the same one.
+Parser added directly against this sample (lib/parsers/trust.ts,
+parseOverseasSpend), verified to extract all fields correctly before
+being treated as reliable.

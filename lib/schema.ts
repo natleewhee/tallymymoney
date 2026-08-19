@@ -4,6 +4,7 @@
 import { sql } from "drizzle-orm";
 import {
   bigint,
+  boolean,
   char,
   check,
   index,
@@ -109,6 +110,12 @@ export const unclassifiedEmails = pgTable(
     receivedAt: timestamp("received_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    // Confirmed 2026-08-19: when Nat taps Needs Parser, the source email
+    // gets a visible Gmail label so he can find it to forward over.
+    // Apps Script polls needs-parser-queue for rows where this is still
+    // false, labels the Gmail thread, then acks — see that route and
+    // apps-script/forward-to-ingest.gs.
+    labeledInGmail: boolean("labeled_in_gmail").notNull().default(false),
   },
   (table) => [
     check(

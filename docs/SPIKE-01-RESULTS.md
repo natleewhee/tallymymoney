@@ -25,8 +25,11 @@ Sanitised copies (account/card numbers and any real personal names redacted; amo
 | 7 | DBS | `ibanking.alert@dbs.com` | PayNow received | credit | SGD 200.00 | a real person's name (redacted in the fixture) |
 | 8 | DBS | `ibanking.alert@dbs.com` | PayNow sent | debit | SGD 30.00 | name partially masked by DBS itself (`SHAXX LOX ZHX QUXX`) |
 | 9 | Citibank | `alerts@citibank.com.sg` | Card spend, foreign currency | debit | **JPY 102,080.00** — no SGD amount given | BKG*Hakoneji Kaiun Amsterdam NLD |
+| 10 | Trust | `from_us@trustbank.sg` | Overseas card spend, foreign currency | debit | **CNY 1,025.88** — no SGD amount given | WEIXIN*Shanghai Pala ShenZhen CN |
 
-Every field the spike cares about — amount, date/time, direction, merchant, account identifier — extracted cleanly by eye from all nine emails. That's evidence of *parseability* on a hand-picked convenience sample, not a substitute for the held-out accuracy test Step 4 actually specifies once a larger, unbiased corpus exists.
+Every field the spike cares about — amount, date/time, direction, merchant, account identifier — extracted cleanly by eye from all ten emails. That's evidence of *parseability* on a hand-picked convenience sample, not a substitute for the held-out accuracy test Step 4 actually specifies once a larger, unbiased corpus exists.
+
+Sample #10 arrived 2026-08-19, after the app was already live and Nat was monitoring real traffic — the first real-world discovery of a template SPIKE-01's original sampling missed: Trust's *overseas* spend notification is a genuinely different template from its domestic one (different word order, never SGD), not a currency substitution in the same shape. Parser added and verified against this exact sample before being trusted — see `lib/parsers/trust.ts` and `spike-01-samples/10-trust-overseas-spend.txt`.
 
 ## Sender domains — corrected, then confirmed
 

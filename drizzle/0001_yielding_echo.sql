@@ -1,0 +1,1 @@
+ALTER TABLE "unclassified_emails" ADD COLUMN "labeled_in_gmail" boolean DEFAULT false NOT NULL;

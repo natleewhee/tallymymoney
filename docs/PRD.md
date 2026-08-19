@@ -48,17 +48,17 @@ Priorities are P0 (v1 cannot ship without it), P1 (v1 should have it), P2 (later
 | FR-4 | **First sighting** of an email pattern — an unrecognised `(sender, subject)` pair, or a previously-working pattern whose parser now returns nothing — triggers a one-time Telegram triage message. It is never silently dropped and never silently assumed to be a transaction | P0 | Nat learns about a new or broken pattern the same day, not at month end, and exactly once per pattern — not once per email |
 | FR-20 | The triage message offers two actions: **Ignore this type** or **Needs parser** | P0 | See breakdown below |
 | FR-20a | **Ignore this type** writes a permanent rule keyed on `(sender, subject)`. Every future email matching that pair is archived with no Telegram message and no row created | P0 | A monthly-statement email or security notice, once dismissed, never asks again |
-| FR-20b | **Needs parser** marks the pattern for rework. Matching emails stop re-alerting (no repeat spam for the same unsolved pattern) but keep accumulating, and the count of pending-parser patterns is surfaced in `/pending` and in every report per FR-15 | P0 | A genuinely new bank notification type gets queued for a real fix instead of nagging Nat or vanishing |
+| FR-20b | **Needs parser** marks the pattern for rework. Matching emails stop re-alerting (no repeat spam for the same unsolved pattern) but keep accumulating, and the count of pending-parser patterns is surfaced in `/pending` and in every report per FR-15. The source email also gets a visible Gmail label (🔴 `tallymymoney-needs-parser`) so Nat can find and forward it | P0 | A genuinely new bank notification type gets queued for a real fix instead of nagging Nat or vanishing. Confirmed 2026-08-19 — the label closes the loop between "flagged in Telegram" and "the actual email Nat needs to send over" |
 | FR-5 | Once a `(sender, subject)` pair is marked Ignore via FR-20a, matching mail is discarded quietly, permanently, until the rule is manually removed | P1 | Superseded by FR-20a — kept as the steady-state description of the behaviour it produces |
 
 ### 5.2 Telegram interaction
 
 | ID | Requirement | Pri | Acceptance |
 |---|---|---|---|
-| FR-6 | Every new transaction sends a message showing amount, merchant, date, bank | P0 | Arrives within 5 minutes of the bank's email |
+| FR-6 | Every new transaction sends a message showing amount, merchant, date, bank. **Date/time is shown in SGT** (Nat's timezone), never raw UTC | P0 | Arrives within 5 minutes of the bank's email. Confirmed 2026-08-19 — an ISO/UTC timestamp is correct but not readable at a glance |
 | FR-7 | **Known merchant:** the message pre-fills category and split, needing one confirming tap — or one tap to override | P0 | Second and later visits to the same merchant cost one tap |
 | FR-8 | **Unknown merchant:** category buttons first, then Solo/Joint | P0 | Resolves the dump's contradiction — the mockups asked Solo/Joint first, the state machine asked category first. Category first wins, because category is what drives merchant memory |
-| FR-9 | Tagging a merchant creates or updates its rule in `merchant_rules` | P0 | Third Starbucks transaction needs no category choice |
+| FR-9 | Tagging a merchant creates or updates its rule in `merchant_rules`. **The confirmation message is a plain-language summary** — "$20.30 paid at Cabcharge Asia (Joint)" — not a bare "Category · Split" label | P0 | Third Starbucks transaction needs no category choice. Confirmed 2026-08-19 |
 | FR-10 | An `Ignore` action marks the transaction excluded from all reporting | P0 | Card verification holds, refunds, own-account transfers |
 | FR-11 | Description can be edited by replying to the message | P1 | Free text saved against the transaction |
 | FR-12 | Untagged transactions can be swept later via `/pending` | P1 | Missing a notification doesn't lose the transaction |

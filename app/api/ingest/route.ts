@@ -98,9 +98,9 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     if (bank) {
-      await notifyParseFailure(inserted!.id, bank, email.subject);
+      await notifyParseFailure(inserted!.id, bank, email.subject, email.receivedAt);
     } else {
-      await notifyUnclassified(inserted!.id, email.from, email.subject);
+      await notifyUnclassified(inserted!.id, email.from, email.subject, email.receivedAt);
     }
     return Response.json({ status: "triaged", unclassifiedId: inserted!.id });
   }

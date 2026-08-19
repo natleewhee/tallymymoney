@@ -30,6 +30,20 @@ export function currentMonthRange(now = new Date()): { start: Date; end: Date } 
   return { start, end };
 }
 
+/** For display in Telegram messages — Nat's timezone, not the UTC the
+ * database stores. e.g. "19 Aug 2026, 10:01 am". */
+export function formatSgtDateTime(date: Date): string {
+  return new Intl.DateTimeFormat("en-SG", {
+    timeZone: "Asia/Singapore",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  }).format(date);
+}
+
 /** Previous calendar month — used by the automatic monthly report (FR-14),
  * which reports on the month that just ended, not the one in progress. */
 export function previousMonthRange(now = new Date()): { start: Date; end: Date; label: string } {
