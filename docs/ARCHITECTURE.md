@@ -69,6 +69,9 @@ Webhook for button callbacks and slash commands. Sub-second work only.
 ### `/api/cron/daily`
 Vercel Hobby allows one daily cron. It exits immediately unless it is the 1st, when it builds and sends the monthly report. Cheaper than fighting the free-tier scheduler.
 
+### `/api/needs-parser-queue`
+Confirmed 2026-08-19: closes the loop between "Nat tapped Needs parser" and "Nat knows which Gmail email to forward." The bot itself has no Gmail access — only Apps Script does — so this is a small polling handoff, not a push. `GET` returns `unclassified_emails` rows with `status = 'needs_parser'` and `labeled_in_gmail = false`; Apps Script's `pollInbox` calls it every 5 minutes (piggybacking on the existing trigger, no second trigger needed), labels the corresponding Gmail thread `🔴 tallymymoney-needs-parser`, then `POST`s the ids back to mark them labelled. Same shared-secret header as `/api/ingest`.
+
 ## 4. Data model
 
 Trimmed hard from `ideation-archive/schema-full.sql`. Single user, so no `users` table and no ownership columns anywhere.
@@ -138,7 +141,10 @@ CREATE TABLE unclassified_emails (
   raw_email         TEXT NOT NULL,
   status            TEXT NOT NULL DEFAULT 'pending_review'
                       CHECK (status IN ('pending_review','ignored','needs_parser')),
-  received_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  received_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  labeled_in_gmail  BOOLEAN NOT NULL DEFAULT FALSE  -- FR-20b: flips true once
+                                                     -- /api/needs-parser-queue confirms
+                                                     -- Apps Script labelled the Gmail thread
 );
 
 -- FR-20a/FR-20b: Nat's one-time classification of a (sender, subject) pattern,

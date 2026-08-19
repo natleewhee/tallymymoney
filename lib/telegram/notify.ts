@@ -8,6 +8,7 @@ import {
   triageKeyboard,
 } from "./keyboards";
 import { normaliseMerchant } from "../merchant";
+import { formatSgtDateTime } from "../sgt";
 
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
@@ -38,7 +39,7 @@ export async function notifyNewTransaction(txId: number): Promise<void> {
     `Amount: ${fmtAmount(tx.amountCents, tx.currency)}${tx.currency !== "SGD" ? ` (≈ SGD ${(tx.sgdAmountCents / 100).toFixed(2)})` : ""}`,
     `Merchant: ${tx.merchantRaw ?? "(none given)"}`,
     `Bank: ${tx.bank}${tx.accountIdentifier ? ` (${tx.accountIdentifier})` : ""}`,
-    `Date: ${tx.occurredAt.toISOString()}`,
+    `Date: ${formatSgtDateTime(tx.occurredAt)}`,
     fxNote,
   ].filter(Boolean);
 
@@ -61,14 +62,22 @@ export async function notifyNewTransaction(txId: number): Promise<void> {
   await db.update(transactions).set({ telegramMessageId: msg.message_id }).where(eq(transactions.id, tx.id));
 }
 
-/** FR-4/FR-20: a new (sender, subject) pattern, never seen before. */
-export async function notifyUnclassified(unclassifiedId: number, sender: string, subject: string | null): Promise<void> {
+/** FR-4/FR-20: a new (sender, subject) pattern, never seen before.
+ * Shows the email's own date/time so Nat can find it in the dedicated
+ * inbox — the received timestamp from Apps Script, not "now". */
+export async function notifyUnclassified(
+  unclassifiedId: number,
+  sender: string,
+  subject: string | null,
+  emailDate: Date,
+): Promise<void> {
   if (!CHAT_ID) throw new Error("TELEGRAM_CHAT_ID is not set");
   const text = [
     "❓ *Unrecognised email*",
     "",
     `From: ${sender}`,
     `Subject: ${subject ?? "(none)"}`,
+    `Date: ${formatSgtDateTime(emailDate)}`,
     "",
     "Is this a transaction email I should learn, or should I ignore this type going forward?",
   ].join("\n");
@@ -81,13 +90,19 @@ export async function notifyUnclassified(unclassifiedId: number, sender: string,
 /** R3: a sender we know, in a shape our parser doesn't recognise —
  * distinct message from notifyUnclassified so it's clear this is parser
  * drift on a previously-working pattern, not a brand-new sender. */
-export async function notifyParseFailure(unclassifiedId: number, bank: string, subject: string | null): Promise<void> {
+export async function notifyParseFailure(
+  unclassifiedId: number,
+  bank: string,
+  subject: string | null,
+  emailDate: Date,
+): Promise<void> {
   if (!CHAT_ID) throw new Error("TELEGRAM_CHAT_ID is not set");
   const text = [
     "⚠️ *Couldn't read this one*",
     "",
     `Bank: ${bank}`,
     `Subject: ${subject ?? "(none)"}`,
+    `Date: ${formatSgtDateTime(emailDate)}`,
     "",
     "This sender is known, but the email didn't match any parser shape — the bank may have changed its template.",
   ].join("\n");
