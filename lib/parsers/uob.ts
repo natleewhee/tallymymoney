@@ -15,9 +15,13 @@ function parseAmount(s: string): number {
 
 function parseCardSpend(text: string): ParsedTransaction | null {
   // "A transaction of SGD 149.90 was made with your UOB Card ending 0997
-  //  on 09/08/26 at TOKU NORI."
+  //  on 09/08/26 at TOKU NORI." Merchant is anchored on the trailing
+  // ". If unauthorised" marker rather than excluding periods outright —
+  // real Singapore company names routinely embed one (e.g. "CRAVE FOODS
+  // PTE. LTD.", confirmed 2026-08-19), and the old exclusion silently
+  // failed to match the whole email whenever one showed up.
   const m = text.match(
-    /A transaction of\s+(SGD\s*[\d,]+\.\d+)\s+was made with your UOB Card ending\s+([A-Za-z0-9]+)\s+on\s+(\d{2}\/\d{2}\/\d{2})\s+at\s+([^\n.]+?)\.?\s*(?:If unauthorised|$)/i,
+    /A transaction of\s+(SGD\s*[\d,]+\.\d+)\s+was made with your UOB Card ending\s+([A-Za-z0-9]+)\s+on\s+(\d{2}\/\d{2}\/\d{2})\s+at\s+(.+?)\.?\s*(?:If unauthorised|$)/i,
   );
   if (!m) return null;
   const [, amountStr, last4, dateStr, merchant] = m;

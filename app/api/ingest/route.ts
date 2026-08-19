@@ -59,24 +59,34 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ status: "ignored-by-rule" });
   }
 
-  if (rule?.action === "needs_parser") {
-    try {
-      await db.insert(unclassifiedEmails).values({
-        emailMessageId: body.messageId,
-        sender: email.from,
-        subject: email.subject,
-        rawEmail: email.htmlBody || email.textBody,
-        status: "needs_parser",
-      });
-    } catch (err) {
-      if (!isUniqueViolation(err)) throw err;
-    }
-    return Response.json({ status: "queued-needs-parser" });
-  }
-
+  // Always try to parse first, even under a "needs_parser" rule. That
+  // rule fingerprints on (sender, subject), but UOB (and potentially
+  // other banks) reuse one generic subject for every transaction type —
+  // "UOB - Transaction Alert" regardless of merchant. A rule created
+  // from one genuinely-broken sample (e.g. a merchant name the old regex
+  // choked on) would otherwise silently swallow every future email that
+  // matches the same (sender, subject), including ones the parser
+  // handles fine. Confirmed 2026-08-19 as the cause of a missed UOB
+  // transaction. Parsing first means a parser fix immediately un-blocks
+  // future good emails without Nat having to clear the rule by hand.
   const { bank, transaction } = dispatch(email);
 
   if (!transaction) {
+    if (rule?.action === "needs_parser") {
+      try {
+        await db.insert(unclassifiedEmails).values({
+          emailMessageId: body.messageId,
+          sender: email.from,
+          subject: email.subject,
+          rawEmail: email.htmlBody || email.textBody,
+          status: "needs_parser",
+        });
+      } catch (err) {
+        if (!isUniqueViolation(err)) throw err;
+      }
+      return Response.json({ status: "queued-needs-parser" });
+    }
+
     // FR-4: first sighting of an unrecognised pattern, or a known sender
     // whose shape our parser doesn't recognise (R3 — parser drift).
     let inserted: { id: number } | undefined;

@@ -7,6 +7,7 @@ import { normaliseMerchant } from "../merchant";
 import {
   categoryKeyboard,
   reduceCandidatesKeyboard,
+  rulesKeyboard,
   splitKeyboard,
 } from "./keyboards";
 import { formatPendingReport, formatRangeReport } from "./reports";
@@ -176,6 +177,22 @@ bot.on("callback_query:data", async (ctx) => {
         await ctx.answerCallbackQuery();
         return;
       }
+      case "rc": {
+        // /rules: clear one sender_rule by its position in that listing.
+        const [idxStr] = rest;
+        const rules = await db.select().from(senderRules).orderBy(desc(senderRules.createdAt));
+        const rule = rules[Number(idxStr)];
+        if (!rule) {
+          await ctx.answerCallbackQuery("Already cleared");
+          return;
+        }
+        await db
+          .delete(senderRules)
+          .where(and(eq(senderRules.sender, rule.sender), eq(senderRules.subject, rule.subject)));
+        await ctx.editMessageText(`✅ Cleared [${rule.action}] ${rule.sender} — "${rule.subject}"`);
+        await ctx.answerCallbackQuery("Cleared");
+        return;
+      }
       case "ti": {
         // FR-20a: ignore this (sender, subject) pattern permanently.
         const [uneId] = rest;
@@ -266,6 +283,20 @@ bot.command("month", async (ctx) => {
 
 bot.command("pending", async (ctx) => {
   await ctx.reply(await formatPendingReport(), { parse_mode: "Markdown" });
+});
+
+// Lets Nat see and undo "ignore"/"needs_parser" sender_rules from the
+// bot instead of raw SQL — needed now that a stale rule can silently
+// block a whole bank's alerts (see the dispatch-first note in
+// app/api/ingest/route.ts).
+bot.command("rules", async (ctx) => {
+  const rules = await db.select().from(senderRules).orderBy(desc(senderRules.createdAt));
+  if (rules.length === 0) {
+    await ctx.reply("No active sender rules.");
+    return;
+  }
+  const lines = rules.map((r, i) => `${i}. [${r.action}] ${r.sender} — "${r.subject}"`);
+  await ctx.reply(lines.join("\n"), { reply_markup: rulesKeyboard(rules.length) });
 });
 
 // FR-19: on-demand only, never automatic. Nat forwards this himself —

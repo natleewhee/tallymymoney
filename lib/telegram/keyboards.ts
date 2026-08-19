@@ -53,3 +53,16 @@ export function triageKeyboard(unclassifiedId: number): InlineKeyboard {
     .text("🚫 Ignore this type", `ti:${unclassifiedId}`)
     .text("🔧 Needs parser", `tn:${unclassifiedId}`);
 }
+
+/** /rules: one "Clear" button per active sender_rule, so Nat can undo an
+ * "ignore" or "needs_parser" rule from the bot instead of raw SQL. Index
+ * is positional within that message's listing, not a DB id — sender_rules
+ * has no surrogate key, and re-querying by the same order on tap is fine
+ * for a single-user tool. */
+export function rulesKeyboard(count: number): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  for (let i = 0; i < count; i++) {
+    kb.text(`🗑 Clear #${i}`, `rc:${i}`).row();
+  }
+  return kb;
+}
