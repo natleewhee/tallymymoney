@@ -266,6 +266,22 @@ bot.on("message:text", async (ctx) => {
   await ctx.reply(`✅ Description updated for #${tx.id}`, { reply_to_message_id: replyToId });
 });
 
+bot.command("help", async (ctx) => {
+  await ctx.reply(
+    [
+      "*Commands*",
+      "/today — Today's spending",
+      "/week — Last 7 days",
+      "/month — This month, by category",
+      "/pending — Transactions and email patterns awaiting action",
+      "/partner — Shareable summary for this month",
+      "/export — CSV export for this month",
+      "/rules — List/clear ignore or needs-parser rules",
+    ].join("\n"),
+    { parse_mode: "Markdown" },
+  );
+});
+
 bot.command("today", async (ctx) => {
   const { start, end } = todayRange();
   await ctx.reply(await formatRangeReport("Today", start, end), { parse_mode: "Markdown" });
