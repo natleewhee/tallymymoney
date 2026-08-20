@@ -107,10 +107,19 @@ export async function POST(req: Request): Promise<Response> {
       throw err;
     }
 
-    if (bank) {
-      await notifyParseFailure(inserted!.id, bank, email.subject, email.receivedAt);
-    } else {
-      await notifyUnclassified(inserted!.id, email.from, email.subject, email.receivedAt);
+    // A failed notification must not fail the request. The row is already
+    // stored, so a 500 here would make Apps Script retry the email
+    // forever while the unique constraint rejects every retry — the
+    // alert would be lost permanently. Surfacing it through /pending is
+    // recoverable; an infinite retry loop is not.
+    try {
+      if (bank) {
+        await notifyParseFailure(inserted!.id, bank, email.subject, email.receivedAt);
+      } else {
+        await notifyUnclassified(inserted!.id, email.from, email.subject, email.receivedAt);
+      }
+    } catch (err) {
+      console.error("triage notification failed; recoverable via /pending", err);
     }
     return Response.json({ status: "triaged", unclassifiedId: inserted!.id });
   }
@@ -160,6 +169,17 @@ export async function POST(req: Request): Promise<Response> {
     throw err;
   }
 
-  await notifyNewTransaction(newTxId);
+  // Same reasoning as the triage notification above: the transaction row
+  // exists now, so throwing here would strand it — Apps Script retries,
+  // the Message-ID unique constraint returns "duplicate", and the alert
+  // is never sent again. notifyNewTransaction only stamps
+  // telegram_message_id after a successful send, so a null there marks
+  // exactly the rows that still need re-sending (see /pending).
+  try {
+    await notifyNewTransaction(newTxId);
+  } catch (err) {
+    console.error(`transaction ${newTxId} saved but not notified; recoverable via /pending`, err);
+    return Response.json({ status: "created-not-notified", transactionId: newTxId });
+  }
   return Response.json({ status: "created", transactionId: newTxId });
 }
