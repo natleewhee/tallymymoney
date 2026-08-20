@@ -20,7 +20,13 @@ if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set");
 
 export const bot = new Bot(token);
 
-const OWNER_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+// Trimmed and stripped of any surrounding quote characters: a stray
+// space, newline, or quote pasted into Vercel's env var field is
+// invisible there but breaks a strict string comparison. Confirmed
+// 2026-08-20 as the likely cause of commands being silently rejected
+// while outgoing notifications (which pass this same value straight to
+// Telegram's API, which is more forgiving) worked fine.
+const OWNER_CHAT_ID = process.env.TELEGRAM_CHAT_ID?.trim().replace(/^["']|["']$/g, "");
 
 /** ARCHITECTURE.md §6: ignore any chat_id that isn't Nat's — single-user
  * product, no reason to process anyone else's messages or callbacks.
