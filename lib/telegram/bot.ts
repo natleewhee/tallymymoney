@@ -28,17 +28,47 @@ export const bot = new Bot(token);
 // Telegram's API, which is more forgiving) worked fine.
 const OWNER_CHAT_ID = process.env.TELEGRAM_CHAT_ID?.trim().replace(/^["']|["']$/g, "");
 
+/** Renders a string so invisible characters are actually visible — a
+ * trailing newline or non-breaking space in a pasted env var looks
+ * identical to a clean value everywhere else. */
+function describeValue(value: string | undefined): string {
+  if (value === undefined) return "(not set)";
+  const codes = [...value].map((c) => c.charCodeAt(0)).join(",");
+  return `"${value}" (length ${value.length}, char codes: ${codes})`;
+}
+
 /** ARCHITECTURE.md §6: ignore any chat_id that isn't Nat's — single-user
  * product, no reason to process anyone else's messages or callbacks.
- * Logs a rejection so a chat_id/env-var mismatch shows up directly in
- * Vercel's function logs instead of looking like total silence with no
- * way to tell why. */
+ *
+ * On rejection this replies to whoever sent the update with both values
+ * spelled out. Three rounds of fixes aimed at this comparison all failed
+ * while the only evidence — a console line naming both sides — sat in
+ * Vercel's runtime logs, which the request summary panel doesn't
+ * include. Replying puts the answer where it can't be missed. Safe
+ * enough for a single-user bot: a chat id is an identifier, not a
+ * credential, and the bot token is never included. Remove once the
+ * mismatch is understood. */
 bot.use(async (ctx, next) => {
   const chatId = ctx.chat?.id?.toString();
   if (!OWNER_CHAT_ID || chatId !== OWNER_CHAT_ID) {
     console.log(
-      `Rejected update: incoming chat_id=${chatId ?? "(none)"}, configured TELEGRAM_CHAT_ID=${OWNER_CHAT_ID ?? "(unset)"}`,
+      `Rejected update: incoming chat_id=${describeValue(chatId)}, configured TELEGRAM_CHAT_ID=${describeValue(OWNER_CHAT_ID)}`,
     );
+    if (ctx.chat) {
+      await ctx
+        .reply(
+          [
+            "🚫 *Rejected — chat id mismatch*",
+            "",
+            `Incoming: ${describeValue(chatId)}`,
+            `Configured: ${describeValue(OWNER_CHAT_ID)}`,
+            "",
+            "Set TELEGRAM_CHAT_ID in Vercel to the incoming value above, then redeploy.",
+          ].join("\n"),
+          { parse_mode: "Markdown" },
+        )
+        .catch((err) => console.error("could not send rejection notice", err));
+    }
     return;
   }
   await next();
