@@ -6,12 +6,14 @@ import { CATEGORIES } from "../categories";
 import { normaliseMerchant } from "../merchant";
 import {
   categoryKeyboard,
+  pendingKeyboard,
   reduceCandidatesKeyboard,
   rulesKeyboard,
   splitKeyboard,
 } from "./keyboards";
 import { formatPendingReport, formatRangeReport } from "./reports";
 import { currentMonthRange, last7DaysRange, todayRange } from "../sgt";
+import { resendUnnotified, retryUnparsed } from "../recovery";
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set");
@@ -177,6 +179,26 @@ bot.on("callback_query:data", async (ctx) => {
         await ctx.answerCallbackQuery();
         return;
       }
+      case "resend": {
+        await ctx.answerCallbackQuery("Re-sending…");
+        const { sent, failed } = await resendUnnotified();
+        await ctx.reply(
+          sent === 0 && failed === 0
+            ? "Nothing to re-send — every saved transaction has been alerted."
+            : `🔄 Re-sent ${sent} missed alert(s)${failed > 0 ? `, ${failed} still failing` : ""}.`,
+        );
+        return;
+      }
+      case "reparse": {
+        await ctx.answerCallbackQuery("Retrying…");
+        const { recovered, stillFailing } = await retryUnparsed();
+        await ctx.reply(
+          recovered === 0 && stillFailing === 0
+            ? "Nothing stuck — no unparsed emails waiting."
+            : `🔁 Recovered ${recovered} transaction(s). ${stillFailing} still can't be read — forward those on so a parser can be built.`,
+        );
+        return;
+      }
       case "rc": {
         // /rules: clear one sender_rule by its position in that listing.
         const [idxStr] = rest;
@@ -298,7 +320,10 @@ bot.command("month", async (ctx) => {
 });
 
 bot.command("pending", async (ctx) => {
-  await ctx.reply(await formatPendingReport(), { parse_mode: "Markdown" });
+  await ctx.reply(await formatPendingReport(), {
+    parse_mode: "Markdown",
+    reply_markup: pendingKeyboard(),
+  });
 });
 
 // Lets Nat see and undo "ignore"/"needs_parser" sender_rules from the

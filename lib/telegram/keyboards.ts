@@ -54,6 +54,16 @@ export function triageKeyboard(unclassifiedId: number): InlineKeyboard {
     .text("🔧 Needs parser", `tn:${unclassifiedId}`);
 }
 
+/** /pending: the two recovery actions — re-send alerts that never made it
+ * out, and re-run the current parsers over the stuck backlog. See
+ * lib/recovery.ts for why neither happens automatically. */
+export function pendingKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("🔄 Re-send missed alerts", "resend")
+    .row()
+    .text("🔁 Retry stuck emails", "reparse");
+}
+
 /** /rules: one "Clear" button per active sender_rule, so Nat can undo an
  * "ignore" or "needs_parser" rule from the bot instead of raw SQL. Index
  * is positional within that message's listing, not a DB id — sender_rules

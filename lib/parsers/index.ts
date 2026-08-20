@@ -22,7 +22,19 @@ export interface DispatchResult {
 export function dispatch(email: InboundEmail): DispatchResult {
   for (const parser of parsers) {
     if (parser.matchesSender(email.from)) {
-      return { bank: parser.bank, transaction: parser.parse(email) };
+      // The amount and date helpers throw on an unrecognised shape rather
+      // than returning null. Uncaught, that propagates out of /api/ingest
+      // as a 500: Apps Script then never labels the thread, retries it
+      // forever, and no triage notification is ever sent — the email
+      // silently disappears. A throw means exactly what a null means
+      // here (this parser can't read this email), so treat it that way
+      // and let FR-4 triage do its job.
+      try {
+        return { bank: parser.bank, transaction: parser.parse(email) };
+      } catch (err) {
+        console.error(`${parser.bank} parser threw, routing to triage`, err);
+        return { bank: parser.bank, transaction: null };
+      }
     }
   }
   return { bank: null, transaction: null };
