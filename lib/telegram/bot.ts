@@ -23,10 +23,18 @@ export const bot = new Bot(token);
 const OWNER_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 /** ARCHITECTURE.md §6: ignore any chat_id that isn't Nat's — single-user
- * product, no reason to process anyone else's messages or callbacks. */
+ * product, no reason to process anyone else's messages or callbacks.
+ * Logs a rejection so a chat_id/env-var mismatch shows up directly in
+ * Vercel's function logs instead of looking like total silence with no
+ * way to tell why. */
 bot.use(async (ctx, next) => {
   const chatId = ctx.chat?.id?.toString();
-  if (!OWNER_CHAT_ID || chatId !== OWNER_CHAT_ID) return;
+  if (!OWNER_CHAT_ID || chatId !== OWNER_CHAT_ID) {
+    console.log(
+      `Rejected update: incoming chat_id=${chatId ?? "(none)"}, configured TELEGRAM_CHAT_ID=${OWNER_CHAT_ID ?? "(unset)"}`,
+    );
+    return;
+  }
   await next();
 });
 
