@@ -38,6 +38,19 @@ bot.use(async (ctx, next) => {
   await next();
 });
 
+/** Without this, grammY's default behaviour on an unhandled error is to
+ * log it to console and still return 200 to Telegram — so a thrown
+ * error (bad DATABASE_URL, a Neon query failure, anything) looks
+ * identical to the bot doing nothing at all, and the only way to see it
+ * is digging through Vercel's function logs. Send it to the chat
+ * instead, so a command that fails says so instead of going silent. */
+bot.catch((err) => {
+  console.error("Unhandled bot error", err.error);
+  if (!OWNER_CHAT_ID) return;
+  const message = err.error instanceof Error ? err.error.message : String(err.error);
+  bot.api.sendMessage(OWNER_CHAT_ID, `⚠️ Something broke: ${message}`).catch(() => {});
+});
+
 /** Confirmed 2026-08-19: Nat wants a plain-language summary after tagging,
  * not a bare "Category · Split" label — e.g. "$20.30 paid at Cabcharge
  * Asia (Joint)". */
