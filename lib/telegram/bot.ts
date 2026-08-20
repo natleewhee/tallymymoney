@@ -23,11 +23,32 @@ export const bot = new Bot(token);
 const OWNER_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 /** ARCHITECTURE.md §6: ignore any chat_id that isn't Nat's — single-user
- * product, no reason to process anyone else's messages or callbacks. */
+ * product, no reason to process anyone else's messages or callbacks.
+ * Logs a rejection so a chat_id/env-var mismatch shows up directly in
+ * Vercel's function logs instead of looking like total silence with no
+ * way to tell why. */
 bot.use(async (ctx, next) => {
   const chatId = ctx.chat?.id?.toString();
-  if (!OWNER_CHAT_ID || chatId !== OWNER_CHAT_ID) return;
+  if (!OWNER_CHAT_ID || chatId !== OWNER_CHAT_ID) {
+    console.log(
+      `Rejected update: incoming chat_id=${chatId ?? "(none)"}, configured TELEGRAM_CHAT_ID=${OWNER_CHAT_ID ?? "(unset)"}`,
+    );
+    return;
+  }
   await next();
+});
+
+/** Without this, grammY's default behaviour on an unhandled error is to
+ * log it to console and still return 200 to Telegram — so a thrown
+ * error (bad DATABASE_URL, a Neon query failure, anything) looks
+ * identical to the bot doing nothing at all, and the only way to see it
+ * is digging through Vercel's function logs. Send it to the chat
+ * instead, so a command that fails says so instead of going silent. */
+bot.catch((err) => {
+  console.error("Unhandled bot error", err.error);
+  if (!OWNER_CHAT_ID) return;
+  const message = err.error instanceof Error ? err.error.message : String(err.error);
+  bot.api.sendMessage(OWNER_CHAT_ID, `⚠️ Something broke: ${message}`).catch(() => {});
 });
 
 /** Confirmed 2026-08-19: Nat wants a plain-language summary after tagging,
