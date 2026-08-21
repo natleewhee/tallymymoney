@@ -124,3 +124,38 @@ export async function notifyParseFailure(
     reply_markup: triageKeyboard(unclassifiedId),
   });
 }
+
+/** FR-22, /estimates: re-announces a transaction still carrying an
+ * unconfirmed FX estimate, with the reply-to-confirm prompt front and
+ * centre — /pending's resend of untagged transactions already carries
+ * this for anything not yet tagged, but a transaction that's already
+ * been tagged has no route back to it at all, since tagging edits the
+ * original message away (confirmed 2026-08-20: the "reply with the real
+ * figure" prompt only ever existed on the original notification, which
+ * editMessageText overwrites the moment a category is picked).
+ *
+ * Deliberately not notifyNewTransaction: that shows the full category
+ * picker, which would misleadingly imply an already-tagged transaction
+ * needs re-tagging. This is just the amount and the ask. */
+export async function notifyFxPending(txId: number): Promise<void> {
+  if (!CHAT_ID) throw new Error("TELEGRAM_CHAT_ID is not set");
+
+  const [tx] = await db.select().from(transactions).where(eq(transactions.id, txId));
+  if (!tx) return;
+
+  const text = [
+    `💱 SGD ESTIMATE UNCONFIRMED — #${tx.id}`,
+    "",
+    `Merchant: ${tx.merchantRaw ?? "(none given)"}`,
+    `Original: ${fmtAmount(tx.amountCents, tx.currency)}`,
+    `Estimated: SGD ${(tx.sgdAmountCents / 100).toFixed(2)}`,
+    `Date: ${formatSgtDateTime(tx.occurredAt)}`,
+    "",
+    "Reply to this message with the real SGD figure from your statement to confirm.",
+  ].join("\n");
+
+  const msg = await bot.api.sendMessage(CHAT_ID, text);
+  // Re-stamped so a reply lands here rather than on whatever message
+  // last held this id — same reasoning as /pending's resend.
+  await db.update(transactions).set({ telegramMessageId: msg.message_id }).where(eq(transactions.id, tx.id));
+}

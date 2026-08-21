@@ -71,12 +71,29 @@ export function parseUobLongDate(s: string): Date {
 
 /** UOB card short form: "09/08/26" (DD/MM/YY), no time given. Midnight
  * SGT is a stated approximation, not a fact — the real time is unknown. */
-export function parseUobShortDate(s: string): Date {
+/** UOB's card-spend template states a date ("on 20/08/26") but never a
+ * time — confirmed live 2026-08-21: a purchase around 7pm SGT was
+ * showing as 12:00am, because every prior version of this function
+ * fabricated midnight rather than admit the time isn't known.
+ *
+ * The email itself is a real-time alert, so its own Date header is a
+ * far better proxy for the actual purchase time than a made-up
+ * constant. The bank's stated date still wins for the calendar day —
+ * reports group by day, and that field is the one UOB actually vouches
+ * for — only the hour/minute are borrowed from receivedAt. */
+export function parseUobShortDate(s: string, receivedAt: Date): Date {
   const m = s.trim().match(/^(\d{2})\/(\d{2})\/(\d{2})$/);
   if (!m) throw new Error(`Unrecognised UOB short date format: "${s}"`);
   const [, dayStr, monthStr, yyStr] = m;
   const year = 2000 + Number(yyStr);
-  return sgtToUtc(year, Number(monthStr) - 1, Number(dayStr), 0, 0);
+  const sgtReceived = new Date(receivedAt.getTime() + SGT_OFFSET_MINUTES * 60 * 1000);
+  return sgtToUtc(
+    year,
+    Number(monthStr) - 1,
+    Number(dayStr),
+    sgtReceived.getUTCHours(),
+    sgtReceived.getUTCMinutes(),
+  );
 }
 
 /** Trust: "16 Aug 2026 12:45SGT" — no space before the SGT suffix. */

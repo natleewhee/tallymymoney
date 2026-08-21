@@ -23,7 +23,7 @@ import {
   todayRange,
 } from "../sgt";
 import { resendUnnotified, retryUnparsed } from "../recovery";
-import { notifyNewTransaction } from "./notify";
+import { notifyFxPending, notifyNewTransaction } from "./notify";
 import { queueLabelRemoval } from "../gmail-labels";
 
 // How many untagged transactions /pending will re-send as tappable
@@ -435,6 +435,7 @@ bot.command("help", async (ctx) => {
       "/export — CSV export for this month",
       "/rules — List/clear ignore or needs-parser rules",
       "/undo — Revert the last tag (and its merchant rule)",
+      "/estimates — List transactions with an unconfirmed FX estimate",
     ].join("\n"),
   );
 });
@@ -496,6 +497,36 @@ bot.command("pending", async (ctx) => {
       await notifyNewTransaction(tx.id);
     } catch (err) {
       console.error(`could not re-send pending transaction ${tx.id}`, err);
+    }
+  }
+});
+
+/** Lists everything still carrying an unconfirmed FX estimate — tagged
+ * or not — and resends each so it can be replied to directly. Answers
+ * the gap /pending left open: it counted these but never showed them,
+ * and a transaction that's already tagged has no other route back to
+ * its confirm prompt at all (tagging edits the original message away). */
+bot.command("estimates", async (ctx) => {
+  const rows = await db
+    .select({ id: transactions.id })
+    .from(transactions)
+    .where(eq(transactions.fxSource, "spot_estimate"))
+    .orderBy(desc(transactions.occurredAt));
+
+  if (rows.length === 0) {
+    await ctx.reply("No unconfirmed FX estimates.");
+    return;
+  }
+
+  await ctx.reply(
+    `💱 ${rows.length} unconfirmed FX estimate(s) — resending below so you can reply to each with the real figure.`,
+  );
+
+  for (const row of rows) {
+    try {
+      await notifyFxPending(row.id);
+    } catch (err) {
+      console.error(`could not resend FX-pending transaction ${row.id}`, err);
     }
   }
 });
