@@ -2,18 +2,26 @@ import { Bot, InputFile } from "grammy";
 import { createHash } from "node:crypto";
 import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import { db } from "../db";
-import { merchantRules, senderRules, tagUndoLog, transactions, unclassifiedEmails } from "../schema";
+import { merchantRules, senderRules, settlements, tagUndoLog, transactions, unclassifiedEmails } from "../schema";
 import { CATEGORIES } from "../categories";
 import { normaliseMerchant } from "../merchant";
 import {
   categoryKeyboard,
+  partnerSettleKeyboard,
   pendingKeyboard,
   reduceCandidatesKeyboard,
   rulesKeyboard,
   splitKeyboard,
 } from "./keyboards";
-import { formatPendingReport, formatRangeReport } from "./reports";
-import { currentMonthRange, last7DaysRange, todayRange } from "../sgt";
+import { computeRangeSummary, fmtSgd, formatPendingReport, formatRangeReport } from "./reports";
+import {
+  currentMonthBounds,
+  currentMonthRange,
+  formatSgtDateTime,
+  last7DaysRange,
+  previousMonthToDateRange,
+  todayRange,
+} from "../sgt";
 import { resendUnnotified, retryUnparsed } from "../recovery";
 import { notifyNewTransaction } from "./notify";
 import { queueLabelRemoval } from "../gmail-labels";
@@ -262,6 +270,30 @@ bot.on("callback_query:data", async (ctx) => {
         await ctx.answerCallbackQuery();
         return;
       }
+      case "ps": {
+        // FR-19: /partner's "mark settled" button. Always the current
+        // calendar month — /partner never offers a past month to settle.
+        const { start, end } = currentMonthBounds();
+        const [existing] = await db
+          .select()
+          .from(settlements)
+          .where(and(eq(settlements.periodStart, start), eq(settlements.periodEnd, end)));
+        if (existing) {
+          await ctx.answerCallbackQuery("Already settled");
+          return;
+        }
+        const summary = await computeRangeSummary(start, end);
+        const half = Math.round(summary.joint / 2);
+        await db.insert(settlements).values({
+          periodStart: start,
+          periodEnd: end,
+          jointTotalCents: summary.joint,
+          halfCents: half,
+        });
+        await ctx.editMessageText(`✅ Settled — ${fmtSgd(summary.joint)} joint, ${fmtSgd(half)} each.`);
+        await ctx.answerCallbackQuery("Marked settled");
+        return;
+      }
       case "resend": {
         await ctx.answerCallbackQuery("Re-sending…");
         const { sent, failed } = await resendUnnotified();
@@ -399,7 +431,7 @@ bot.command("help", async (ctx) => {
       "/week — Last 7 days",
       "/month — This month, by category",
       "/pending — Transactions and email patterns awaiting action",
-      "/partner — Shareable summary for this month",
+      "/partner — Shareable summary + settle-up figure for this month",
       "/export — CSV export for this month",
       "/rules — List/clear ignore or needs-parser rules",
       "/undo — Revert the last tag (and its merchant rule)",
@@ -419,7 +451,17 @@ bot.command("week", async (ctx) => {
 
 bot.command("month", async (ctx) => {
   const { start, end } = currentMonthRange();
-  await ctx.reply(await formatRangeReport("This month", start, end));
+  // Same day-of-month cutoff one month back, not the full previous
+  // month — a finished month will always look bigger than a
+  // still-in-progress one, which isn't a meaningful comparison.
+  const prevRange = previousMonthToDateRange();
+  const prevSummary = await computeRangeSummary(prevRange.start, prevRange.end);
+  await ctx.reply(
+    await formatRangeReport("This month", start, end, {
+      label: "same point last month",
+      total: prevSummary.total,
+    }),
+  );
 });
 
 /** The summary is the header; the untagged transactions follow as
@@ -542,9 +584,26 @@ bot.command("rules", async (ctx) => {
 // FR-19: on-demand only, never automatic. Nat forwards this himself —
 // no standing access, no second chat wired up.
 bot.command("partner", async (ctx) => {
-  const { start, end } = currentMonthRange();
+  const { start, end } = currentMonthBounds();
   const report = await formatRangeReport("Shared this month", start, end);
-  await ctx.reply(`${report}\n\nForward this to share — nothing is sent automatically.`);
+  const summary = await computeRangeSummary(start, end);
+  const half = Math.round(summary.joint / 2);
+
+  const [existing] = await db
+    .select()
+    .from(settlements)
+    .where(and(eq(settlements.periodStart, start), eq(settlements.periodEnd, end)));
+
+  const settleLines = ["", "🤝 SETTLE-UP", `Joint total: ${fmtSgd(summary.joint)}`, `Your half: ${fmtSgd(half)}`];
+  if (existing) {
+    settleLines.push(
+      `✅ Already settled — ${fmtSgd(existing.jointTotalCents)} joint, ${fmtSgd(existing.halfCents)} each, on ${formatSgtDateTime(existing.settledAt)}`,
+    );
+  }
+
+  await ctx.reply(`${report}\n${settleLines.join("\n")}\n\nForward this to share — nothing is sent automatically.`, {
+    reply_markup: !existing && summary.joint > 0 ? partnerSettleKeyboard() : undefined,
+  });
 });
 
 // FR-16 (P2): CSV export for the current month by default.
