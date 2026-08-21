@@ -20,43 +20,35 @@ if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set");
 
 export const bot = new Bot(token);
 
-// Trimmed and stripped of any surrounding quote characters: a stray
-// space, newline, or quote pasted into Vercel's env var field is
-// invisible there but breaks a strict string comparison. Confirmed
-// 2026-08-20 as the likely cause of commands being silently rejected
-// while outgoing notifications (which pass this same value straight to
-// Telegram's API, which is more forgiving) worked fine.
+// Trimmed and stripped of any surrounding quote characters — harmless
+// hygiene against a stray space/newline/quote in the pasted env var.
+// Confirmed 2026-08-20 this was never actually the bug (the incoming
+// and configured values matched exactly, byte for byte, the whole
+// time); the real cause was the message:text handler below swallowing
+// every command before it reached this far. Kept anyway since it's a
+// cheap, correct defense against a real (if different) class of issue.
 const OWNER_CHAT_ID = process.env.TELEGRAM_CHAT_ID?.trim().replace(/^["']|["']$/g, "");
 
 /** Renders a string so invisible characters are actually visible — a
  * trailing newline or non-breaking space in a pasted env var looks
- * identical to a clean value everywhere else. */
+ * identical to a clean value everywhere else. Used by /whoami. */
 function describeValue(value: string | undefined): string {
   if (value === undefined) return "(not set)";
   const codes = [...value].map((c) => c.charCodeAt(0)).join(",");
   return `"${value}" (length ${value.length}, char codes: ${codes})`;
 }
 
-/** TEMPORARILY DISABLED, 2026-08-20: four straight fixes aimed at this
- * comparison (trim, logging, a reply-with-diagnostic) produced zero
- * observable change — no console output, no reply, nothing — which is
- * only consistent with this middleware never running at all, or a
- * command's own reply failing for a reason unrelated to chat_id
- * entirely. The gate is disabled outright (not just logged-and-passed)
- * so this and every command handler run unconditionally, and every
- * reply announces the chat id that hit it, in plain text with no
- * parse_mode — removing the last variable a formatting-related send
- * failure could be hiding behind. RE-ENABLE THE GATE (see ARCHITECTURE.md
- * §6) the moment a real reply is confirmed in Telegram. */
+/** ARCHITECTURE.md §6: ignore any chat_id that isn't Nat's — single-user
+ * product, no reason to process anyone else's messages or callbacks. */
 bot.use(async (ctx, next) => {
   const chatId = ctx.chat?.id?.toString();
-  if (!OWNER_CHAT_ID || chatId !== OWNER_CHAT_ID) {
-    console.error(
-      `chat_id mismatch (gate disabled, proceeding anyway): incoming=${describeValue(chatId)}, configured=${describeValue(OWNER_CHAT_ID)}`,
-    );
-  }
+  if (!OWNER_CHAT_ID || chatId !== OWNER_CHAT_ID) return;
   await next();
 });
+
+// Kept as a small permanent diagnostic — cheap, and would have made the
+// 2026-08-20 chat_id dead-end obvious in one message instead of several
+// rounds of guessing.
 
 bot.command("whoami", async (ctx) => {
   await ctx.reply(
@@ -307,10 +299,22 @@ bot.on("callback_query:data", async (ctx) => {
 
 /** FR-11 (description edit) and FR-22 (FX amend) — both driven by
  * replying directly to the original transaction message, no extra state
- * store needed since Telegram already tracks the reply target. */
-bot.on("message:text", async (ctx) => {
+ * store needed since Telegram already tracks the reply target.
+ *
+ * Root cause found 2026-08-20: every slash command is also a text
+ * message, and grammY runs handlers in registration order — this one is
+ * registered before bot.command(...) below. The original code returned
+ * here without calling next() on every non-reply message, which is
+ * every single command, silently swallowing all of them before they
+ * ever reached /today, /week, /pending, etc. The comment already said
+ * "command handlers below cover the rest" — next() is what actually
+ * makes that true. */
+bot.on("message:text", async (ctx, next) => {
   const replyToId = ctx.message.reply_to_message?.message_id;
-  if (!replyToId) return; // not a reply — command handlers below cover the rest
+  if (!replyToId) {
+    await next();
+    return;
+  }
 
   const [tx] = await db
     .select()
