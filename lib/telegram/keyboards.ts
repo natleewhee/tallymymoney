@@ -65,14 +65,22 @@ export function pendingKeyboard(): InlineKeyboard {
 }
 
 /** /rules: one "Clear" button per active sender_rule, so Nat can undo an
- * "ignore" or "needs_parser" rule from the bot instead of raw SQL. Index
- * is positional within that message's listing, not a DB id — sender_rules
- * has no surrogate key, and re-querying by the same order on tap is fine
- * for a single-user tool. */
-export function rulesKeyboard(count: number): InlineKeyboard {
+ * "ignore" or "needs_parser" rule from the bot instead of raw SQL.
+ *
+ * Each button carries a short hash of that rule's (sender, subject) —
+ * NOT its position in the listing. sender_rules has no surrogate key and
+ * created_at defaults to now(), which in Postgres is transaction start
+ * time, so rules created in one request tie exactly. An ORDER BY with
+ * tied values has no guaranteed order, so a positional index could
+ * resolve to a different, real rule on tap and delete it silently. A
+ * wrongly-surviving "ignore" rule blocks a whole bank's alerts, so this
+ * is worth the extra indirection. Hash rather than the raw pair because
+ * Telegram caps callback_data at 64 bytes and a real sender+subject
+ * exceeds that. */
+export function rulesKeyboard(rules: { key: string; label: string }[]): InlineKeyboard {
   const kb = new InlineKeyboard();
-  for (let i = 0; i < count; i++) {
-    kb.text(`🗑 Clear #${i}`, `rc:${i}`).row();
+  for (const rule of rules) {
+    kb.text(`🗑 Clear ${rule.label}`, `rc:${rule.key}`).row();
   }
   return kb;
 }
