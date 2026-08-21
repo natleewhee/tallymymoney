@@ -13,7 +13,7 @@ function parseAmount(s: string): number {
   return Math.round(parseFloat(m[1].replace(/,/g, "")) * 100);
 }
 
-function parseCardSpend(text: string): ParsedTransaction | null {
+function parseCardSpend(text: string, receivedAt: Date): ParsedTransaction | null {
   // "A transaction of SGD 149.90 was made with your UOB Card ending 0997
   //  on 09/08/26 at TOKU NORI." Merchant is anchored on the trailing
   // ". If unauthorised" marker rather than excluding periods outright —
@@ -32,7 +32,7 @@ function parseCardSpend(text: string): ParsedTransaction | null {
     merchantRaw: cleanMerchant(merchant),
     bank: "UOB",
     accountIdentifier: last4,
-    occurredAt: parseUobShortDate(dateStr),
+    occurredAt: parseUobShortDate(dateStr, receivedAt),
   };
 }
 
@@ -64,6 +64,6 @@ export const uobParser: BankParser = {
     const text = bestText(email, stripHtml);
     if (!text) return null;
 
-    return parseCardSpend(text) ?? parsePayNowReceived(text) ?? null;
+    return parseCardSpend(text, email.receivedAt) ?? parsePayNowReceived(text) ?? null;
   },
 };

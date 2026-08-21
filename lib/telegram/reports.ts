@@ -82,7 +82,7 @@ export async function formatRangeReport(title: string, start: Date, end: Date): 
 
   lines.push("", `📈 ${rows.length} transaction(s)`);
   if (untagged > 0) lines.push(`⚠️ ${untagged} untagged`);
-  if (fxEstimated > 0) lines.push(`⚠️ ${fxEstimated} carrying an unconfirmed FX estimate — see /pending`);
+  if (fxEstimated > 0) lines.push(`⚠️ ${fxEstimated} carrying an unconfirmed FX estimate — see /estimates`);
   if (pendingParserCount > 0) lines.push(`⚠️ ${pendingParserCount} email pattern(s) awaiting a parser — see /pending`);
 
   return lines.join("\n");
@@ -106,7 +106,7 @@ export async function formatPendingReport(): Promise<string> {
 
   const lines = ["📋 PENDING", ""];
   lines.push(`Untagged transactions: ${untagged.length}`);
-  lines.push(`Unconfirmed FX estimates: ${fxEstimates.length}`);
+  lines.push(`Unconfirmed FX estimates: ${fxEstimates.length}${fxEstimates.length > 0 ? " — see /estimates" : ""}`);
   lines.push(`Email patterns awaiting a parser: ${needsParser.length}`);
 
   if (untagged.length > 0) {
