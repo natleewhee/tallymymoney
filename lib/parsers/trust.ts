@@ -85,6 +85,32 @@ function parsePartialReversal(text: string): ParsedTransaction | null {
   };
 }
 
+function parseOverseasRefund(text: string): ParsedTransaction | null {
+  // "We've refunded CNY1025.88 from WEIXIN*Meituan platf     ShenZhen
+  //  51800   CN  to your Trust card on 21 Aug 2026 14:40SGT."
+  //
+  // Distinct from parsePartialReversal: that one is SGD, states the
+  // merchant before the amount, and says "partially reversed". This is a
+  // full refund of a foreign-currency charge, so the currency is never
+  // SGD and FX conversion happens downstream in /api/ingest (FR-2). Note
+  // the amount has no space after the currency here ("CNY1025.88") where
+  // the overseas *spend* template has one — hence \s* in both.
+  const m = text.match(
+    /We[''`]?ve refunded\s+([A-Z]{3})\s*([\d,]+\.\d+)\s+from\s+(.+?)\s+to your\s+([^\n]+?)\s+card on\s+(\d{1,2}\s+[A-Za-z]{3,}\s+\d{4}\s+\d{1,2}:\d{2}SGT)/i,
+  );
+  if (!m) return null;
+  const [, currency, amountStr, merchant, cardName, dateStr] = m;
+  return {
+    amountCents: parseGenericAmount(amountStr),
+    currency: currency.toUpperCase(),
+    direction: "credit",
+    merchantRaw: cleanMerchant(merchant),
+    bank: "Trust",
+    accountIdentifier: cardName.trim(),
+    occurredAt: parseTrustDate(dateStr),
+  };
+}
+
 export const trustParser: BankParser = {
   bank: "Trust",
   matchesSender(from: string): boolean {
@@ -94,6 +120,12 @@ export const trustParser: BankParser = {
     const text = bestText(email, stripHtml);
     if (!text) return null;
 
-    return parseSpend(text) ?? parseOverseasSpend(text) ?? parsePartialReversal(text) ?? null;
+    return (
+      parseSpend(text) ??
+      parseOverseasSpend(text) ??
+      parsePartialReversal(text) ??
+      parseOverseasRefund(text) ??
+      null
+    );
   },
 };

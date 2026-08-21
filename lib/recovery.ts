@@ -18,6 +18,7 @@ import { transactions, unclassifiedEmails } from "./schema";
 import { dispatch, type InboundEmail } from "./parsers";
 import { convertToSgd } from "./fx";
 import { notifyNewTransaction } from "./telegram/notify";
+import { queueLabelRemoval } from "./gmail-labels";
 
 /** Re-sends alerts for transactions that were stored but never announced. */
 export async function resendUnnotified(): Promise<{ sent: number; failed: number }> {
@@ -114,6 +115,14 @@ export async function retryUnparsed(): Promise<{ recovered: number; stillFailing
           rawEmail: row.rawEmail,
         })
         .returning({ id: transactions.id });
+
+      // Queue the Gmail label removal BEFORE deleting the row — the
+      // delete takes emailMessageId with it, and that id is the only way
+      // Apps Script can find the thread. Only when the label was
+      // actually applied; otherwise there's nothing to take off.
+      if (row.labeledInGmail) {
+        await queueLabelRemoval(row.emailMessageId);
+      }
 
       await db.delete(unclassifiedEmails).where(eq(unclassifiedEmails.id, row.id));
       recovered += 1;

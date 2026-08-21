@@ -3,12 +3,19 @@
 // one to forward for a real parser to get built. The bot (Vercel) has no
 // Gmail access — only Apps Script, running inside the dedicated inbox,
 // does. So this is a small polling queue: Apps Script's pollInbox calls
-// GET here for unlabelled needs_parser rows, labels the corresponding
-// Gmail thread, then POSTs the ids back here to mark them done.
+// GET here, acts on Gmail, then POSTs back what it did.
+//
+// Extended 2026-08-21 to carry the reverse instruction too. A label that
+// only ever goes on is worse than no label — once the parser is built
+// and the email reparsed, the red flag stays on a thread that is no
+// longer stuck, and the inbox slowly fills with false alarms. Both
+// directions ride the same 5-minute poll rather than adding a second
+// endpoint and a second round trip.
 
 import { db } from "@/lib/db";
-import { unclassifiedEmails } from "@/lib/schema";
+import { gmailLabelRemovals, unclassifiedEmails } from "@/lib/schema";
 import { and, eq, inArray } from "drizzle-orm";
+import { pendingLabelRemovals } from "@/lib/gmail-labels";
 
 export const runtime = "nodejs";
 
@@ -22,18 +29,23 @@ export async function GET(req: Request): Promise<Response> {
     return Response.json({ error: "unauthorised" }, { status: 401 });
   }
 
-  const rows = await db
+  const items = await db
     .select({ id: unclassifiedEmails.id, emailMessageId: unclassifiedEmails.emailMessageId })
     .from(unclassifiedEmails)
     .where(
       and(eq(unclassifiedEmails.status, "needs_parser"), eq(unclassifiedEmails.labeledInGmail, false)),
     );
 
-  return Response.json({ items: rows });
+  const removals = await pendingLabelRemovals();
+
+  return Response.json({ items, removals });
 }
 
 interface AckBody {
-  ids: number[];
+  /** unclassified_emails ids the label was just applied to. */
+  ids?: number[];
+  /** gmail_label_removals ids the label was just taken off. */
+  removalIds?: number[];
 }
 
 export async function POST(req: Request): Promise<Response> {
@@ -47,14 +59,28 @@ export async function POST(req: Request): Promise<Response> {
   } catch {
     return Response.json({ error: "invalid JSON body" }, { status: 400 });
   }
-  if (!Array.isArray(body.ids) || body.ids.length === 0) {
-    return Response.json({ error: "ids must be a non-empty array" }, { status: 400 });
+
+  const ids = Array.isArray(body.ids) ? body.ids : [];
+  const removalIds = Array.isArray(body.removalIds) ? body.removalIds : [];
+  if (ids.length === 0 && removalIds.length === 0) {
+    return Response.json({ error: "nothing to acknowledge" }, { status: 400 });
   }
 
-  await db
-    .update(unclassifiedEmails)
-    .set({ labeledInGmail: true })
-    .where(inArray(unclassifiedEmails.id, body.ids));
+  if (ids.length > 0) {
+    await db
+      .update(unclassifiedEmails)
+      .set({ labeledInGmail: true })
+      .where(inArray(unclassifiedEmails.id, ids));
+  }
 
-  return Response.json({ status: "ok", acked: body.ids.length });
+  if (removalIds.length > 0) {
+    // Kept as rows with removed_at set rather than deleted, so a thread
+    // is never re-queued for removal by a later run.
+    await db
+      .update(gmailLabelRemovals)
+      .set({ removedAt: new Date() })
+      .where(inArray(gmailLabelRemovals.id, removalIds));
+  }
+
+  return Response.json({ status: "ok", labelled: ids.length, unlabelled: removalIds.length });
 }

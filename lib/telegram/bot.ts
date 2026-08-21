@@ -16,6 +16,7 @@ import { formatPendingReport, formatRangeReport } from "./reports";
 import { currentMonthRange, last7DaysRange, todayRange } from "../sgt";
 import { resendUnnotified, retryUnparsed } from "../recovery";
 import { notifyNewTransaction } from "./notify";
+import { queueLabelRemoval } from "../gmail-labels";
 
 // How many untagged transactions /pending will re-send as tappable
 // messages. Capped so a long-neglected backlog does not dump fifty
@@ -312,6 +313,12 @@ bot.on("callback_query:data", async (ctx) => {
             set: { action: "ignore" },
           });
         await db.update(unclassifiedEmails).set({ status: "ignored" }).where(eq(unclassifiedEmails.id, Number(uneId)));
+        // Ignoring the type resolves the email as surely as parsing it
+        // would, so the red flag comes off too — otherwise it sits on a
+        // thread nothing will ever be done about.
+        if (row.labeledInGmail) {
+          await queueLabelRemoval(row.emailMessageId);
+        }
         await ctx.editMessageText("🚫 Will ignore this type going forward");
         await ctx.answerCallbackQuery("Ignoring this type");
         return;
