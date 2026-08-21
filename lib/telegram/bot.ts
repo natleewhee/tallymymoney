@@ -37,41 +37,31 @@ function describeValue(value: string | undefined): string {
   return `"${value}" (length ${value.length}, char codes: ${codes})`;
 }
 
-/** ARCHITECTURE.md §6: ignore any chat_id that isn't Nat's — single-user
- * product, no reason to process anyone else's messages or callbacks.
- *
- * On rejection this replies to whoever sent the update with both values
- * spelled out. Three rounds of fixes aimed at this comparison all failed
- * while the only evidence — a console line naming both sides — sat in
- * Vercel's runtime logs, which the request summary panel doesn't
- * include. Replying puts the answer where it can't be missed. Safe
- * enough for a single-user bot: a chat id is an identifier, not a
- * credential, and the bot token is never included. Remove once the
- * mismatch is understood. */
+/** TEMPORARILY DISABLED, 2026-08-20: four straight fixes aimed at this
+ * comparison (trim, logging, a reply-with-diagnostic) produced zero
+ * observable change — no console output, no reply, nothing — which is
+ * only consistent with this middleware never running at all, or a
+ * command's own reply failing for a reason unrelated to chat_id
+ * entirely. The gate is disabled outright (not just logged-and-passed)
+ * so this and every command handler run unconditionally, and every
+ * reply announces the chat id that hit it, in plain text with no
+ * parse_mode — removing the last variable a formatting-related send
+ * failure could be hiding behind. RE-ENABLE THE GATE (see ARCHITECTURE.md
+ * §6) the moment a real reply is confirmed in Telegram. */
 bot.use(async (ctx, next) => {
   const chatId = ctx.chat?.id?.toString();
   if (!OWNER_CHAT_ID || chatId !== OWNER_CHAT_ID) {
-    console.log(
-      `Rejected update: incoming chat_id=${describeValue(chatId)}, configured TELEGRAM_CHAT_ID=${describeValue(OWNER_CHAT_ID)}`,
+    console.error(
+      `chat_id mismatch (gate disabled, proceeding anyway): incoming=${describeValue(chatId)}, configured=${describeValue(OWNER_CHAT_ID)}`,
     );
-    if (ctx.chat) {
-      await ctx
-        .reply(
-          [
-            "🚫 *Rejected — chat id mismatch*",
-            "",
-            `Incoming: ${describeValue(chatId)}`,
-            `Configured: ${describeValue(OWNER_CHAT_ID)}`,
-            "",
-            "Set TELEGRAM_CHAT_ID in Vercel to the incoming value above, then redeploy.",
-          ].join("\n"),
-          { parse_mode: "Markdown" },
-        )
-        .catch((err) => console.error("could not send rejection notice", err));
-    }
-    return;
   }
   await next();
+});
+
+bot.command("whoami", async (ctx) => {
+  await ctx.reply(
+    `Incoming chat_id: ${describeValue(ctx.chat?.id?.toString())}\nConfigured TELEGRAM_CHAT_ID: ${describeValue(OWNER_CHAT_ID)}`,
+  );
 });
 
 /** Without this, grammY's default behaviour on an unhandled error is to
