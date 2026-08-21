@@ -32,7 +32,7 @@ export async function formatRangeReport(title: string, start: Date, end: Date): 
     .where(eq(unclassifiedEmails.status, "needs_parser"));
 
   if (rows.length === 0) {
-    return `📊 *${title}*\n\nNo transactions.${pendingParserCount > 0 ? `\n\n⚠️ ${pendingParserCount} email pattern(s) still awaiting a parser — see /pending` : ""}`;
+    return `📊 ${title.toUpperCase()}\n\nNo transactions.${pendingParserCount > 0 ? `\n\n⚠️ ${pendingParserCount} email pattern(s) still awaiting a parser — see /pending` : ""}`;
   }
 
   // Net each row against anything that reduces it.
@@ -69,12 +69,12 @@ export async function formatRangeReport(title: string, start: Date, end: Date): 
     if (t.fxSource === "spot_estimate") fxEstimated += 1;
   }
 
-  const lines: string[] = [`📊 *${title}*`, "", `💳 Total: ${fmtSgd(total)}`];
+  const lines: string[] = [`📊 ${title.toUpperCase()}`, "", `💳 Total: ${fmtSgd(total)}`];
   if (solo || joint) {
     lines.push(`👤 Solo: ${fmtSgd(solo)}  ·  👥 Joint: ${fmtSgd(joint)}`);
   }
   if (byCategory.size > 0) {
-    lines.push("", "*By category*");
+    lines.push("", "BY CATEGORY");
     for (const [cat, amt] of [...byCategory.entries()].sort((a, b) => b[1] - a[1])) {
       lines.push(`${cat}: ${fmtSgd(amt)}`);
     }
@@ -104,13 +104,13 @@ export async function formatPendingReport(): Promise<string> {
     .from(unclassifiedEmails)
     .where(eq(unclassifiedEmails.status, "needs_parser"));
 
-  const lines = ["📋 *Pending*", ""];
+  const lines = ["📋 PENDING", ""];
   lines.push(`Untagged transactions: ${untagged.length}`);
   lines.push(`Unconfirmed FX estimates: ${fxEstimates.length}`);
   lines.push(`Email patterns awaiting a parser: ${needsParser.length}`);
 
   if (untagged.length > 0) {
-    lines.push("", "*Untagged*");
+    lines.push("", "UNTAGGED");
     for (const t of untagged.slice(0, 10)) {
       lines.push(`#${t.id} — ${fmtSgd(t.sgdAmountCents)} ${t.merchantRaw ?? "(no merchant)"}`);
     }

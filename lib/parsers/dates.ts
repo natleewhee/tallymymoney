@@ -37,6 +37,26 @@ export function parseDbsTableDate(s: string, referenceDate: Date): Date {
   return sgtToUtc(year, month0, Number(dayStr), Number(hourStr), Number(minuteStr));
 }
 
+/** DBS inline PayNow-received shape: "11 Aug 2026 17:17" — the year is
+ * stated in the email, so it is used as given.
+ *
+ * Deliberately NOT routed through parseDbsTableDate. That function's
+ * Dec/Jan guard exists to correct a *guessed* year, and corrupts a known
+ * one: the caller used to pass Date.UTC(year, 0, 1) as its reference,
+ * which is always January, so any December transaction hit the
+ * "Dec transaction, Jan email" branch and silently lost a year — filing
+ * it twelve months in the past, out of every report. Harmless eleven
+ * months of the year, which is why it survived review. See
+ * docs/LESSONS.md. */
+export function parseDbsExplicitDate(s: string): Date {
+  const m = s.trim().match(/^(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{4})\s+(\d{1,2}):(\d{2})$/);
+  if (!m) throw new Error(`Unrecognised DBS explicit-year date: "${s}"`);
+  const [, dayStr, monthStr, yearStr, hourStr, minuteStr] = m;
+  const month0 = MONTHS[monthStr.slice(0, 3).toLowerCase()];
+  if (month0 === undefined) throw new Error(`Unrecognised month in DBS date: "${s}"`);
+  return sgtToUtc(Number(yearStr), month0, Number(dayStr), Number(hourStr), Number(minuteStr));
+}
+
 /** UOB card/PayNow-received long form: "11-AUG-2026 01:44PM" */
 export function parseUobLongDate(s: string): Date {
   const m = s.trim().match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})\s+(\d{1,2}):(\d{2})(AM|PM)$/i);

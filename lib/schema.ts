@@ -95,6 +95,38 @@ export const merchantRules = pgTable("merchant_rules", {
     .defaultNow(),
 });
 
+// Undo support for tagging. Tagging writes in two places — the
+// transaction row and the merchant rule that pre-fills future visits to
+// the same merchant — so a mistap doesn't just mislabel one purchase, it
+// poisons every future one. Reverting needs the prior state of both, and
+// neither is recoverable after the write, so it's snapshotted here first.
+// One row per tag action; /undo pops the most recent and deletes it.
+export const tagUndoLog = pgTable("tag_undo_log", {
+  id: serial("id").primaryKey(),
+  transactionId: integer("transaction_id")
+    .notNull()
+    .references((): AnyPgColumn => transactions.id),
+
+  // Prior state of the transaction row.
+  prevCategory: text("prev_category"),
+  prevSplit: text("prev_split"),
+  prevStatus: text("prev_status").notNull(),
+  prevTaggedAt: timestamp("prev_tagged_at", { withTimezone: true }),
+
+  // Prior state of the merchant rule. merchantKey is null when the
+  // transaction had no merchant to key on (UOB PayNow-received, for
+  // instance), in which case no rule was touched and there's nothing to
+  // restore. ruleExisted distinguishes "update an existing rule back to
+  // these values" from "no rule existed, delete the one we created".
+  merchantKey: text("merchant_key"),
+  ruleExisted: boolean("rule_existed").notNull().default(false),
+  prevRuleCategory: text("prev_rule_category"),
+  prevRuleSplit: text("prev_rule_split"),
+  prevRuleHitCount: integer("prev_rule_hit_count"),
+
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 // FR-4/FR-20: anything that didn't become a transaction — an
 // unrecognised (sender, subject) pair, or a previously-working pattern
 // that returned nothing this time.
@@ -152,3 +184,4 @@ export type NewTransaction = typeof transactions.$inferInsert;
 export type MerchantRule = typeof merchantRules.$inferSelect;
 export type UnclassifiedEmail = typeof unclassifiedEmails.$inferSelect;
 export type SenderRule = typeof senderRules.$inferSelect;
+export type TagUndoEntry = typeof tagUndoLog.$inferSelect;

@@ -1,7 +1,8 @@
 import { Bot, InputFile } from "grammy";
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { createHash } from "node:crypto";
+import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import { db } from "../db";
-import { merchantRules, senderRules, transactions, unclassifiedEmails } from "../schema";
+import { merchantRules, senderRules, tagUndoLog, transactions, unclassifiedEmails } from "../schema";
 import { CATEGORIES } from "../categories";
 import { normaliseMerchant } from "../merchant";
 import {
@@ -14,6 +15,13 @@ import {
 import { formatPendingReport, formatRangeReport } from "./reports";
 import { currentMonthRange, last7DaysRange, todayRange } from "../sgt";
 import { resendUnnotified, retryUnparsed } from "../recovery";
+import { notifyNewTransaction } from "./notify";
+
+// How many untagged transactions /pending will re-send as tappable
+// messages. Capped so a long-neglected backlog does not dump fifty
+// notifications into the chat at once; the summary still reports
+// the true total, so nothing is hidden.
+const PENDING_TAGGABLE_LIMIT = 10;
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set");
@@ -69,6 +77,16 @@ bot.catch((err) => {
   bot.api.sendMessage(OWNER_CHAT_ID, `⚠️ Something broke: ${message}`).catch(() => {});
 });
 
+/** Stable short identifier for a sender_rule, used as callback data on
+ * /rules buttons. sender_rules is keyed on (sender, subject) with no
+ * surrogate id, and the raw pair is far too long for Telegram's 64-byte
+ * callback_data limit — so hash it. Not security-sensitive; this only
+ * needs to be collision-free across a handful of rules and stable
+ * between rendering a button and tapping it. */
+function senderRuleKey(sender: string, subject: string): string {
+  return createHash("sha1").update(`${sender}\u0000${subject}`).digest("hex").slice(0, 16);
+}
+
 /** Confirmed 2026-08-19: Nat wants a plain-language summary after tagging,
  * not a bare "Category · Split" label — e.g. "$20.30 paid at Cabcharge
  * Asia (Joint)". */
@@ -87,18 +105,43 @@ async function markTagged(txId: number, category: string, split: "solo" | "joint
   const [tx] = await db.select().from(transactions).where(eq(transactions.id, txId));
   if (!tx) return;
 
+  // Credits must not write merchant memory. A refund from a person, or a
+  // PayNow transfer in, is not evidence about what a future *payment* to
+  // that same name should be categorised as — but the rule it creates
+  // would pre-fill exactly that. Snapshot/rule handling below is
+  // therefore debit-only.
+  const key = tx.direction === "debit" && tx.merchantRaw ? normaliseMerchant(tx.merchantRaw) : null;
+  const [existingRule] = key
+    ? await db.select().from(merchantRules).where(eq(merchantRules.merchantNormalised, key))
+    : [undefined];
+
+  // Snapshot both sides before touching either, so /undo can restore
+  // them. Written first: if the tag itself fails we're left with an
+  // unused log row, which is harmless; the reverse would leave a tag
+  // that can't be undone.
+  await db.insert(tagUndoLog).values({
+    transactionId: txId,
+    prevCategory: tx.category,
+    prevSplit: tx.split,
+    prevStatus: tx.status,
+    prevTaggedAt: tx.taggedAt,
+    merchantKey: key,
+    ruleExisted: !!existingRule,
+    prevRuleCategory: existingRule?.category ?? null,
+    prevRuleSplit: existingRule?.defaultSplit ?? null,
+    prevRuleHitCount: existingRule?.hitCount ?? null,
+  });
+
   await db
     .update(transactions)
     .set({ category, split, status: "tagged", taggedAt: new Date() })
     .where(eq(transactions.id, txId));
 
-  if (tx.merchantRaw) {
-    const key = normaliseMerchant(tx.merchantRaw);
-    const [existing] = await db.select().from(merchantRules).where(eq(merchantRules.merchantNormalised, key));
-    if (existing) {
+  if (key) {
+    if (existingRule) {
       await db
         .update(merchantRules)
-        .set({ category, defaultSplit: split, hitCount: existing.hitCount + 1, updatedAt: new Date() })
+        .set({ category, defaultSplit: split, hitCount: existingRule.hitCount + 1, updatedAt: new Date() })
         .where(eq(merchantRules.merchantNormalised, key));
     } else {
       await db.insert(merchantRules).values({ merchantNormalised: key, category, defaultSplit: split });
@@ -239,10 +282,12 @@ bot.on("callback_query:data", async (ctx) => {
         return;
       }
       case "rc": {
-        // /rules: clear one sender_rule by its position in that listing.
-        const [idxStr] = rest;
-        const rules = await db.select().from(senderRules).orderBy(desc(senderRules.createdAt));
-        const rule = rules[Number(idxStr)];
+        // /rules: clear one sender_rule, identified by a hash of its
+        // (sender, subject) rather than its position in the listing —
+        // see rulesKeyboard for why position is unsafe here.
+        const [key] = rest;
+        const rules = await db.select().from(senderRules);
+        const rule = rules.find((r) => senderRuleKey(r.sender, r.subject) === key);
         if (!rule) {
           await ctx.answerCallbackQuery("Already cleared");
           return;
@@ -342,7 +387,7 @@ bot.on("message:text", async (ctx, next) => {
 bot.command("help", async (ctx) => {
   await ctx.reply(
     [
-      "*Commands*",
+      "COMMANDS",
       "/today — Today's spending",
       "/week — Last 7 days",
       "/month — This month, by category",
@@ -350,31 +395,117 @@ bot.command("help", async (ctx) => {
       "/partner — Shareable summary for this month",
       "/export — CSV export for this month",
       "/rules — List/clear ignore or needs-parser rules",
+      "/undo — Revert the last tag (and its merchant rule)",
     ].join("\n"),
-    { parse_mode: "Markdown" },
   );
 });
 
 bot.command("today", async (ctx) => {
   const { start, end } = todayRange();
-  await ctx.reply(await formatRangeReport("Today", start, end), { parse_mode: "Markdown" });
+  await ctx.reply(await formatRangeReport("Today", start, end));
 });
 
 bot.command("week", async (ctx) => {
   const { start, end } = last7DaysRange();
-  await ctx.reply(await formatRangeReport("Last 7 days", start, end), { parse_mode: "Markdown" });
+  await ctx.reply(await formatRangeReport("Last 7 days", start, end));
 });
 
 bot.command("month", async (ctx) => {
   const { start, end } = currentMonthRange();
-  await ctx.reply(await formatRangeReport("This month", start, end), { parse_mode: "Markdown" });
+  await ctx.reply(await formatRangeReport("This month", start, end));
 });
 
+/** The summary is the header; the untagged transactions follow as
+ * individual tappable messages.
+ *
+ * Previously this listed untagged rows as plain text with no buttons, so
+ * clearing a backlog meant scrolling back through chat history hunting
+ * for each original notification — which, if a notification was swiped
+ * away or never arrived, was impossible. Re-sending them here makes
+ * /pending the one place a backlog can actually be worked. */
 bot.command("pending", async (ctx) => {
   await ctx.reply(await formatPendingReport(), {
-    parse_mode: "Markdown",
     reply_markup: pendingKeyboard(),
   });
+
+  const untagged = await db
+    .select()
+    .from(transactions)
+    .where(eq(transactions.status, "pending"))
+    .orderBy(desc(transactions.occurredAt))
+    .limit(PENDING_TAGGABLE_LIMIT);
+
+  if (untagged.length === 0) return;
+
+  for (const tx of untagged) {
+    // Reuses the same notification the transaction originally arrived
+    // as, so the buttons and the merchant pre-fill behave identically —
+    // and telegram_message_id is re-stamped to this newer message, which
+    // keeps reply-to-amend (FR-11/FR-22) pointing at something that
+    // still exists in the chat.
+    try {
+      await notifyNewTransaction(tx.id);
+    } catch (err) {
+      console.error(`could not re-send pending transaction ${tx.id}`, err);
+    }
+  }
+});
+
+/** Reverts the most recent tag — both the transaction row and the
+ * merchant rule it wrote. Without this, a mistap is permanent from the
+ * bot's side: the wrong category is now merchant memory and pre-fills
+ * every future visit, and correcting it means raw SQL against Neon. */
+bot.command("undo", async (ctx) => {
+  const [entry] = await db
+    .select()
+    .from(tagUndoLog)
+    .orderBy(desc(tagUndoLog.id))
+    .limit(1);
+
+  if (!entry) {
+    await ctx.reply("Nothing to undo.");
+    return;
+  }
+
+  const [tx] = await db.select().from(transactions).where(eq(transactions.id, entry.transactionId));
+
+  await db
+    .update(transactions)
+    .set({
+      category: entry.prevCategory,
+      split: entry.prevSplit,
+      status: entry.prevStatus,
+      taggedAt: entry.prevTaggedAt,
+    })
+    .where(eq(transactions.id, entry.transactionId));
+
+  if (entry.merchantKey) {
+    if (entry.ruleExisted) {
+      await db
+        .update(merchantRules)
+        .set({
+          category: entry.prevRuleCategory!,
+          defaultSplit: entry.prevRuleSplit,
+          hitCount: entry.prevRuleHitCount!,
+          updatedAt: new Date(),
+        })
+        .where(eq(merchantRules.merchantNormalised, entry.merchantKey));
+    } else {
+      // No rule existed before this tag, so the tag created it — remove
+      // it rather than leaving a rule nothing justifies.
+      await db.delete(merchantRules).where(eq(merchantRules.merchantNormalised, entry.merchantKey));
+    }
+  }
+
+  // Consume the entry so a second /undo steps further back rather than
+  // replaying the same revert.
+  await db.delete(tagUndoLog).where(eq(tagUndoLog.id, entry.id));
+
+  const what = tx?.merchantRaw ?? `#${entry.transactionId}`;
+  const restored = entry.prevCategory
+    ? `back to ${entry.prevCategory}${entry.prevSplit ? ` / ${entry.prevSplit}` : ""}`
+    : "back to untagged";
+  await ctx.reply(`↩️ Undone — ${what} is ${restored}.`);
 });
 
 // Lets Nat see and undo "ignore"/"needs_parser" sender_rules from the
@@ -382,13 +513,23 @@ bot.command("pending", async (ctx) => {
 // block a whole bank's alerts (see the dispatch-first note in
 // app/api/ingest/route.ts).
 bot.command("rules", async (ctx) => {
-  const rules = await db.select().from(senderRules).orderBy(desc(senderRules.createdAt));
+  // Sorted with sender/subject as tiebreakers, not createdAt alone —
+  // same-request rules share a timestamp exactly, and an untied ORDER BY
+  // gives no stable order between two runs of the same query.
+  const rules = await db
+    .select()
+    .from(senderRules)
+    .orderBy(desc(senderRules.createdAt), asc(senderRules.sender), asc(senderRules.subject));
   if (rules.length === 0) {
     await ctx.reply("No active sender rules.");
     return;
   }
-  const lines = rules.map((r, i) => `${i}. [${r.action}] ${r.sender} — "${r.subject}"`);
-  await ctx.reply(lines.join("\n"), { reply_markup: rulesKeyboard(rules.length) });
+  const lines = rules.map((r, i) => `${i + 1}. [${r.action}] ${r.sender} — "${r.subject}"`);
+  const buttons = rules.map((r, i) => ({
+    key: senderRuleKey(r.sender, r.subject),
+    label: `#${i + 1}`,
+  }));
+  await ctx.reply(lines.join("\n"), { reply_markup: rulesKeyboard(buttons) });
 });
 
 // FR-19: on-demand only, never automatic. Nat forwards this himself —
@@ -396,9 +537,7 @@ bot.command("rules", async (ctx) => {
 bot.command("partner", async (ctx) => {
   const { start, end } = currentMonthRange();
   const report = await formatRangeReport("Shared this month", start, end);
-  await ctx.reply(`${report}\n\n_Forward this to share — nothing is sent automatically._`, {
-    parse_mode: "Markdown",
-  });
+  await ctx.reply(`${report}\n\nForward this to share — nothing is sent automatically.`);
 });
 
 // FR-16 (P2): CSV export for the current month by default.

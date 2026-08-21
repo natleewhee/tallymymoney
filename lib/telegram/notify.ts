@@ -1,3 +1,19 @@
+// Every message here is PLAIN TEXT — no parse_mode, deliberately.
+//
+// These messages interpolate bank-supplied merchant strings, and card
+// networks routinely put Markdown-active characters in them:
+// "WEIXIN*Shanghai Pala" (a real sample in spike-01), "AMAZON*MKTPLACE",
+// "SQ *COFFEEBAR". Under parse_mode:"Markdown" an odd number of asterisks
+// makes Telegram reject the whole sendMessage with HTTP 400, which means
+// the transaction is saved to the database and Nat is never told it
+// exists — /api/ingest catches the throw, logs it, and Apps Script sees a
+// 2xx and marks the email done. An even number is worse in its own way:
+// it renders as bold and silently eats the characters.
+//
+// Bold headers are not worth losing transactions over. If formatting is
+// ever wanted back, it must come with escaping of every interpolated
+// bank-derived value — see docs/LESSONS.md.
+
 import { eq } from "drizzle-orm";
 import { db } from "../db";
 import { merchantRules, transactions } from "../schema";
@@ -34,7 +50,7 @@ export async function notifyNewTransaction(txId: number): Promise<void> {
   const fxNote = tx.fxSource === "spot_estimate" ? "\n⚠️ SGD amount is an estimate — reply with the real figure once confirmed" : "";
 
   const lines = [
-    `${directionEmoji} *${tx.direction === "debit" ? "New transaction" : "Money in"}*`,
+    `${directionEmoji} ${tx.direction === "debit" ? "NEW TRANSACTION" : "MONEY IN"}`,
     "",
     `Amount: ${fmtAmount(tx.amountCents, tx.currency)}${tx.currency !== "SGD" ? ` (≈ SGD ${(tx.sgdAmountCents / 100).toFixed(2)})` : ""}`,
     `Merchant: ${tx.merchantRaw ?? "(none given)"}`,
@@ -48,15 +64,14 @@ export async function notifyNewTransaction(txId: number): Promise<void> {
   if (rule) {
     const msg = await bot.api.sendMessage(
       CHAT_ID,
-      `${text}\n\n📌 Known merchant → *${rule.category}*${rule.defaultSplit ? ` / ${rule.defaultSplit}` : ""}`,
-      { parse_mode: "Markdown", reply_markup: confirmOrOverrideKeyboard(tx.id) },
+      `${text}\n\n📌 Known merchant → ${rule.category}${rule.defaultSplit ? ` / ${rule.defaultSplit}` : ""}`,
+      { reply_markup: confirmOrOverrideKeyboard(tx.id) },
     );
     await db.update(transactions).set({ telegramMessageId: msg.message_id }).where(eq(transactions.id, tx.id));
     return;
   }
 
   const msg = await bot.api.sendMessage(CHAT_ID, text, {
-    parse_mode: "Markdown",
     reply_markup: newTransactionKeyboard(tx.id),
   });
   await db.update(transactions).set({ telegramMessageId: msg.message_id }).where(eq(transactions.id, tx.id));
@@ -73,7 +88,7 @@ export async function notifyUnclassified(
 ): Promise<void> {
   if (!CHAT_ID) throw new Error("TELEGRAM_CHAT_ID is not set");
   const text = [
-    "❓ *Unrecognised email*",
+    "❓ UNRECOGNISED EMAIL",
     "",
     `From: ${sender}`,
     `Subject: ${subject ?? "(none)"}`,
@@ -82,7 +97,6 @@ export async function notifyUnclassified(
     "Is this a transaction email I should learn, or should I ignore this type going forward?",
   ].join("\n");
   await bot.api.sendMessage(CHAT_ID, text, {
-    parse_mode: "Markdown",
     reply_markup: triageKeyboard(unclassifiedId),
   });
 }
@@ -98,7 +112,7 @@ export async function notifyParseFailure(
 ): Promise<void> {
   if (!CHAT_ID) throw new Error("TELEGRAM_CHAT_ID is not set");
   const text = [
-    "⚠️ *Couldn't read this one*",
+    "⚠️ COULDN'T READ THIS ONE",
     "",
     `Bank: ${bank}`,
     `Subject: ${subject ?? "(none)"}`,
@@ -107,7 +121,6 @@ export async function notifyParseFailure(
     "This sender is known, but the email didn't match any parser shape — the bank may have changed its template.",
   ].join("\n");
   await bot.api.sendMessage(CHAT_ID, text, {
-    parse_mode: "Markdown",
     reply_markup: triageKeyboard(unclassifiedId),
   });
 }

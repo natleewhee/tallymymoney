@@ -18,7 +18,7 @@
 import type { BankParser, InboundEmail, ParsedTransaction } from "./types";
 import { bestText, cleanMerchant } from "./types";
 import { stripHtml } from "./html";
-import { parseDbsTableDate } from "./dates";
+import { parseDbsExplicitDate, parseDbsTableDate } from "./dates";
 
 const OWN_INSTRUMENT = /(card ending|wallet|account.*ending|a\/c.*ending)/i;
 
@@ -83,14 +83,14 @@ function parseInlineReceivedShape(text: string, receivedAt: Date): ParsedTransac
   const fromMatch = text.match(/From:\s*([^\n]+)/i);
   const toMatch = text.match(/To:\s*([^\n]+)/i);
 
-  // The date in this shape includes the year already, unlike the table
-  // shape — reuse parseDbsTableDate by stripping the year back out, since
-  // it already handles "D MMM HH:mm" with a reference-year fallback and
-  // the year here is explicit anyway.
+  // This shape states the year, so it's parsed as-is. It used to be
+  // routed through parseDbsTableDate with a synthetic January reference
+  // date, which made that function's Dec/Jan guard fire on every
+  // December transaction and file it a year early.
   const dateMatch = text.match(/on\s+(\d{1,2}\s+[A-Za-z]{3,})\s+(\d{4})\s+(\d{1,2}:\d{2})\s*SGT/i);
   if (!dateMatch) return null;
   const [, dayMonth, yearStr, time] = dateMatch;
-  const occurredAt = parseDbsTableDate(`${dayMonth} ${time}`, new Date(Date.UTC(Number(yearStr), 0, 1)));
+  const occurredAt = parseDbsExplicitDate(`${dayMonth} ${yearStr} ${time}`);
 
   return {
     amountCents,

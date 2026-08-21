@@ -15,6 +15,13 @@
       "when": 1787145002413,
       "tag": "0001_yielding_echo",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787299505651,
+      "tag": "0002_spotty_doomsday",
+      "breakpoints": true
     }
   ]
 }
