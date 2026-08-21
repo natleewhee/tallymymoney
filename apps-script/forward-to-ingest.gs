@@ -4,8 +4,9 @@
  * Runs inside the DEDICATED inbox (nattytallymonny@gmail.com), never
  * Nat's real inbox. Reads unprocessed threads, POSTs each message to
  * /api/ingest, labels the thread once every message in it succeeds.
- * Also polls /api/needs-parser-queue and labels any email Nat flagged
- * "Needs parser" in Telegram, so he can find it in Gmail to forward on.
+ * Also polls /api/needs-parser-queue to add the "Needs parser" label to
+ * emails Nat flagged in Telegram, and to take it back off once they are
+ * no longer stuck.
  * See docs/ARCHITECTURE.md "Apps Script (dedicated account)".
  *
  * Setup, done once inside the DEDICATED account:
@@ -85,22 +86,29 @@ function pollInbox() {
     }
   });
 
-  labelNeedsParserEmails();
+  syncNeedsParserLabels();
 }
 
 /**
- * Confirmed 2026-08-19: when Nat taps "Needs parser" in Telegram, the
- * source email should be visibly labelled so he can find it to forward
- * over. The bot itself has no Gmail access — only this script does — so
- * it works as a small queue: ask the app which messages need labelling,
- * label them here, then tell the app they're done.
+ * Keeps the "Needs parser" Gmail label in sync with what the app knows,
+ * in both directions.
+ *
+ * On: Nat tapped "Needs parser" in Telegram, so the email gets a visible
+ * red flag he can find and forward over.
+ * Off: that email is no longer stuck — a parser was built and it
+ * reparsed, or he chose to ignore the type instead — so the flag comes
+ * back off rather than lingering as a false alarm.
+ *
+ * The bot itself has no Gmail access; only this script does. So the app
+ * can do no more than leave a note, and this asks for the notes on every
+ * poll, acts on Gmail, and reports back what it did.
  */
-function labelNeedsParserEmails() {
+function syncNeedsParserLabels() {
   var props = PropertiesService.getScriptProperties();
   var queueUrl = props.getProperty("NEEDS_PARSER_QUEUE_URL");
   var ingestSecret = props.getProperty("INGEST_SECRET");
   if (!queueUrl || !ingestSecret) {
-    Logger.log("NEEDS_PARSER_QUEUE_URL not set — skipping needs-parser labelling.");
+    Logger.log("NEEDS_PARSER_QUEUE_URL not set - skipping needs-parser label sync.");
     return;
   }
 
@@ -120,35 +128,52 @@ function labelNeedsParserEmails() {
     return;
   }
 
-  var items = JSON.parse(response.getContentText()).items || [];
-  if (items.length === 0) return;
+  var payload = JSON.parse(response.getContentText());
+  var items = payload.items || [];
+  var removals = payload.removals || [];
+  if (items.length === 0 && removals.length === 0) return;
 
   var label = GmailApp.getUserLabelByName(NEEDS_PARSER_LABEL) || GmailApp.createLabel(NEEDS_PARSER_LABEL);
   var labelledIds = [];
+  var removedIds = [];
 
   items.forEach(function (item) {
     try {
-      var message = GmailApp.getMessageById(item.emailMessageId);
-      message.getThread().addLabel(label);
+      GmailApp.getMessageById(item.emailMessageId).getThread().addLabel(label);
       labelledIds.push(item.id);
     } catch (err) {
-      // Message may have been deleted from Gmail since — nothing to
+      // Message may have been deleted from Gmail since - nothing to
       // label, but don't let one bad id block the rest of the batch.
       Logger.log("Could not label message " + item.emailMessageId + ": " + err);
     }
   });
 
-  if (labelledIds.length === 0) return;
+  // The reverse direction: the email is no longer stuck (a parser was
+  // built and it reparsed, or Nat chose to ignore that type), so the red
+  // flag comes back off. Acked even when the message is gone from Gmail
+  // - there is no label left to remove either way, and leaving it queued
+  // would retry forever.
+  removals.forEach(function (removal) {
+    try {
+      GmailApp.getMessageById(removal.emailMessageId).getThread().removeLabel(label);
+      removedIds.push(removal.id);
+    } catch (err) {
+      Logger.log("Could not unlabel message " + removal.emailMessageId + " (acking anyway): " + err);
+      removedIds.push(removal.id);
+    }
+  });
+
+  if (labelledIds.length === 0 && removedIds.length === 0) return;
 
   try {
     UrlFetchApp.fetch(queueUrl, {
       method: "post",
       contentType: "application/json",
       headers: { "x-ingest-secret": ingestSecret },
-      payload: JSON.stringify({ ids: labelledIds }),
+      payload: JSON.stringify({ ids: labelledIds, removalIds: removedIds }),
       muteHttpExceptions: true,
     });
   } catch (err) {
-    Logger.log("Failed to ack labelled needs-parser ids: " + err);
+    Logger.log("Failed to ack needs-parser label changes: " + err);
   }
 }

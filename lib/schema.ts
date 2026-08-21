@@ -160,6 +160,23 @@ export const unclassifiedEmails = pgTable(
   ],
 );
 
+// Work queue for taking the "needs parser" label back off a Gmail thread
+// once the email is no longer stuck — a parser was built and the email
+// reparsed, or Nat decided to ignore that type instead.
+//
+// Needs its own table rather than a flag on unclassified_emails because
+// a successful reparse DELETES that row, taking the Gmail message id
+// with it — so the instruction to unlabel has to outlive the thing it
+// refers to. Same polling shape as the labelling direction: only Apps
+// Script can touch Gmail, so the app can do no more than leave a note.
+export const gmailLabelRemovals = pgTable("gmail_label_removals", {
+  id: serial("id").primaryKey(),
+  emailMessageId: text("email_message_id").notNull().unique(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  // Null until Apps Script confirms the label is off the thread.
+  removedAt: timestamp("removed_at", { withTimezone: true }),
+});
+
 // FR-20a/FR-20b: Nat's one-time classification of a (sender, subject)
 // pattern, applied to every future email matching it.
 export const senderRules = pgTable(
@@ -185,3 +202,4 @@ export type MerchantRule = typeof merchantRules.$inferSelect;
 export type UnclassifiedEmail = typeof unclassifiedEmails.$inferSelect;
 export type SenderRule = typeof senderRules.$inferSelect;
 export type TagUndoEntry = typeof tagUndoLog.$inferSelect;
+export type GmailLabelRemoval = typeof gmailLabelRemovals.$inferSelect;
