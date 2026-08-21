@@ -15,6 +15,7 @@ A personal Telegram bot that reads Singapore bank transaction-alert emails, asks
 | [`docs/SPIKE-01-RESULTS.md`](docs/SPIKE-01-RESULTS.md) | Real sample evidence and the decisions it forced (FX handling, reversal handling, unrecognised-email triage) |
 | [`docs/PRD.md`](docs/PRD.md) | What it does, scoped to one user, FR-1 through FR-22 |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Design and schema this code actually implements |
+| [`docs/LESSONS.md`](docs/LESSONS.md) | Debugging incidents worth not repeating |
 | [`ideation-archive/`](ideation-archive/) | The original DeepSeek ideation dump, preserved |
 
 ## Scope — read this before suggesting anything
