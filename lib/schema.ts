@@ -196,6 +196,25 @@ export const senderRules = pgTable(
   ],
 );
 
+// FR-19 settle-up: one row per month Nat has confirmed he and his partner
+// have squared up. periodStart/periodEnd are full calendar-month bounds
+// (see sgt.ts currentMonthBounds) so a settlement's identity doesn't
+// drift depending on which day of the month /partner is used.
+export const settlements = pgTable(
+  "settlements",
+  {
+    id: serial("id").primaryKey(),
+    periodStart: timestamp("period_start", { withTimezone: true }).notNull(),
+    periodEnd: timestamp("period_end", { withTimezone: true }).notNull(),
+    jointTotalCents: bigint("joint_total_cents", { mode: "number" }).notNull(),
+    halfCents: bigint("half_cents", { mode: "number" }).notNull(),
+    settledAt: timestamp("settled_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_settlements_period").on(table.periodStart, table.periodEnd),
+  ],
+);
+
 export type Transaction = typeof transactions.$inferSelect;
 export type NewTransaction = typeof transactions.$inferInsert;
 export type MerchantRule = typeof merchantRules.$inferSelect;
@@ -203,3 +222,4 @@ export type UnclassifiedEmail = typeof unclassifiedEmails.$inferSelect;
 export type SenderRule = typeof senderRules.$inferSelect;
 export type TagUndoEntry = typeof tagUndoLog.$inferSelect;
 export type GmailLabelRemoval = typeof gmailLabelRemovals.$inferSelect;
+export type Settlement = typeof settlements.$inferSelect;

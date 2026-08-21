@@ -84,3 +84,10 @@ export function rulesKeyboard(rules: { key: string; label: string }[]): InlineKe
   }
   return kb;
 }
+
+/** /partner: logs a settlement for the current calendar month. Always
+ * "the current month" rather than an encoded period — /partner never
+ * offers a past month to settle, so there's nothing to disambiguate. */
+export function partnerSettleKeyboard(): InlineKeyboard {
+  return new InlineKeyboard().text("✅ Mark settled this month", "ps");
+}

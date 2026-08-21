@@ -7,12 +7,41 @@ import { and, eq, gte, lt, sql } from "drizzle-orm";
 import { db } from "../db";
 import { transactions, unclassifiedEmails } from "../schema";
 
-function fmtSgd(cents: number): string {
+export function fmtSgd(cents: number): string {
   const sign = cents < 0 ? "-" : "";
   return `${sign}$${(Math.abs(cents) / 100).toFixed(2)}`;
 }
 
-export async function formatRangeReport(title: string, start: Date, end: Date): Promise<string> {
+/** Signed delta with an explicit +/- — fmtSgd's sign only ever shows for
+ * negative, which reads fine for a total but is ambiguous for a
+ * comparison ("$120.00" bigger or smaller than last month?). */
+function fmtDelta(cents: number): string {
+  if (cents === 0) return "$0.00";
+  return cents > 0 ? `+${fmtSgd(cents)}` : `-${fmtSgd(Math.abs(cents))}`;
+}
+
+export interface RangeSummary {
+  /** Debit spend minus standalone credits (refunds/PayNow-in not routed
+   * through Reduce) — the net figure a report's headline total means. */
+  total: number;
+  /** Credits, shown separately so they aren't just a silent subtraction. */
+  moneyIn: number;
+  solo: number;
+  joint: number;
+  byCategory: Map<string, number>;
+  uncategorizedTotal: number;
+  untaggedCount: number;
+  fxEstimatedCount: number;
+  pendingParserCount: number;
+  /** Non-ignored rows actually folded into the totals above — what the
+   * "N transaction(s)" line should say, not the raw row count. */
+  txCount: number;
+}
+
+/** Shared aggregation behind every report and behind /partner's
+ * settle-up figure, so "this month's joint total" always means the same
+ * thing wherever it's computed. */
+export async function computeRangeSummary(start: Date, end: Date): Promise<RangeSummary> {
   const rows = await db
     .select()
     .from(transactions)
@@ -31,10 +60,6 @@ export async function formatRangeReport(title: string, start: Date, end: Date): 
     .from(unclassifiedEmails)
     .where(eq(unclassifiedEmails.status, "needs_parser"));
 
-  if (rows.length === 0) {
-    return `📊 ${title.toUpperCase()}\n\nNo transactions.${pendingParserCount > 0 ? `\n\n⚠️ ${pendingParserCount} email pattern(s) still awaiting a parser — see /pending` : ""}`;
-  }
-
   // Net each row against anything that reduces it.
   const reductions = await db
     .select({
@@ -50,40 +75,99 @@ export async function formatRangeReport(title: string, start: Date, end: Date): 
   }
 
   let total = 0;
+  let moneyIn = 0;
   let solo = 0;
   let joint = 0;
-  let untagged = 0;
-  let fxEstimated = 0;
+  let untaggedCount = 0;
+  let fxEstimatedCount = 0;
+  let txCount = 0;
+  let uncategorizedTotal = 0;
   const byCategory = new Map<string, number>();
 
   for (const t of rows) {
     if (t.status === "ignored") continue;
+    txCount += 1;
+
     const net = t.sgdAmountCents - (reductionByTarget.get(t.id) ?? 0);
-    if (t.direction === "debit") {
-      total += net;
-      if (t.split === "solo") solo += net;
-      if (t.split === "joint") joint += net;
-      if (!t.category) untagged += 1;
-      if (t.category) byCategory.set(t.category, (byCategory.get(t.category) ?? 0) + net);
+    // A credit not routed through Reduce (a standalone refund, a PayNow
+    // repayment) still means less was actually spent — defect 4:
+    // previously these were read and counted but contributed nothing,
+    // so the total silently overstated spend.
+    const signed = t.direction === "debit" ? net : -net;
+    if (t.direction === "credit") moneyIn += net;
+
+    total += signed;
+    if (t.split === "solo") solo += signed;
+    if (t.split === "joint") joint += signed;
+
+    if (!t.category) {
+      untaggedCount += 1;
+      uncategorizedTotal += signed;
+    } else {
+      byCategory.set(t.category, (byCategory.get(t.category) ?? 0) + signed);
     }
-    if (t.fxSource === "spot_estimate") fxEstimated += 1;
+
+    if (t.fxSource === "spot_estimate") fxEstimatedCount += 1;
   }
 
-  const lines: string[] = [`📊 ${title.toUpperCase()}`, "", `💳 Total: ${fmtSgd(total)}`];
-  if (solo || joint) {
-    lines.push(`👤 Solo: ${fmtSgd(solo)}  ·  👥 Joint: ${fmtSgd(joint)}`);
+  return {
+    total,
+    moneyIn,
+    solo,
+    joint,
+    byCategory,
+    uncategorizedTotal,
+    untaggedCount,
+    fxEstimatedCount,
+    pendingParserCount,
+    txCount,
+  };
+}
+
+export interface ComparisonPeriod {
+  label: string;
+  total: number;
+}
+
+export async function formatRangeReport(
+  title: string,
+  start: Date,
+  end: Date,
+  comparison?: ComparisonPeriod,
+): Promise<string> {
+  const s = await computeRangeSummary(start, end);
+
+  if (s.txCount === 0) {
+    const lines = [`📊 ${title.toUpperCase()}`, "", "No transactions."];
+    if (comparison) lines.push(`📈 vs ${comparison.label}: ${fmtSgd(s.total)} vs ${fmtSgd(comparison.total)}`);
+    if (s.pendingParserCount > 0) {
+      lines.push(`⚠️ ${s.pendingParserCount} email pattern(s) still awaiting a parser — see /pending`);
+    }
+    return lines.join("\n");
   }
-  if (byCategory.size > 0) {
+
+  const lines: string[] = [`📊 ${title.toUpperCase()}`, "", `💳 Total: ${fmtSgd(s.total)}`];
+  if (comparison) {
+    const delta = s.total - comparison.total;
+    const pct = comparison.total !== 0 ? ` (${delta >= 0 ? "+" : ""}${Math.round((delta / comparison.total) * 100)}%)` : "";
+    lines.push(`📈 vs ${comparison.label}: ${fmtDelta(delta)}${pct} — was ${fmtSgd(comparison.total)}`);
+  }
+  if (s.moneyIn > 0) lines.push(`💰 Money in: ${fmtSgd(s.moneyIn)} (already netted into total)`);
+  if (s.solo || s.joint) {
+    lines.push(`👤 Solo: ${fmtSgd(s.solo)}  ·  👥 Joint: ${fmtSgd(s.joint)}`);
+  }
+  if (s.byCategory.size > 0 || s.uncategorizedTotal !== 0) {
     lines.push("", "BY CATEGORY");
-    for (const [cat, amt] of [...byCategory.entries()].sort((a, b) => b[1] - a[1])) {
+    for (const [cat, amt] of [...s.byCategory.entries()].sort((a, b) => b[1] - a[1])) {
       lines.push(`${cat}: ${fmtSgd(amt)}`);
     }
+    if (s.uncategorizedTotal !== 0) lines.push(`Uncategorised: ${fmtSgd(s.uncategorizedTotal)}`);
   }
 
-  lines.push("", `📈 ${rows.length} transaction(s)`);
-  if (untagged > 0) lines.push(`⚠️ ${untagged} untagged`);
-  if (fxEstimated > 0) lines.push(`⚠️ ${fxEstimated} carrying an unconfirmed FX estimate — see /estimates`);
-  if (pendingParserCount > 0) lines.push(`⚠️ ${pendingParserCount} email pattern(s) awaiting a parser — see /pending`);
+  lines.push("", `📈 ${s.txCount} transaction(s)`);
+  if (s.untaggedCount > 0) lines.push(`⚠️ ${s.untaggedCount} untagged`);
+  if (s.fxEstimatedCount > 0) lines.push(`⚠️ ${s.fxEstimatedCount} carrying an unconfirmed FX estimate — see /estimates`);
+  if (s.pendingParserCount > 0) lines.push(`⚠️ ${s.pendingParserCount} email pattern(s) awaiting a parser — see /pending`);
 
   return lines.join("\n");
 }
