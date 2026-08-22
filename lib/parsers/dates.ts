@@ -96,6 +96,21 @@ export function parseUobShortDate(s: string, receivedAt: Date): Date {
   );
 }
 
+/** UOB reversal shape: "22 Aug 26, 1:09PM" — two-digit year, comma
+ * before the time, hour not zero-padded. Distinct from parseUobLongDate's
+ * "11-AUG-2026 01:44PM" (dashes, four-digit year, zero-padded hour) —
+ * confirmed by a real sample, not assumed to be the same format. */
+export function parseUobReversalDate(s: string): Date {
+  const m = s.trim().match(/^(\d{1,2})\s+([A-Za-z]{3})\s+(\d{2}),\s+(\d{1,2}):(\d{2})(AM|PM)$/i);
+  if (!m) throw new Error(`Unrecognised UOB reversal date format: "${s}"`);
+  const [, dayStr, monthStr, yyStr, hourStr, minuteStr, ampm] = m;
+  const month0 = MONTHS[monthStr.toLowerCase()];
+  if (month0 === undefined) throw new Error(`Unrecognised month in UOB reversal date: "${s}"`);
+  let hour = Number(hourStr) % 12;
+  if (ampm.toUpperCase() === "PM") hour += 12;
+  return sgtToUtc(2000 + Number(yyStr), month0, Number(dayStr), hour, Number(minuteStr));
+}
+
 /** Trust: "16 Aug 2026 12:45SGT" — no space before the SGT suffix. */
 export function parseTrustDate(s: string): Date {
   const m = s.trim().match(/^(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{4})\s+(\d{1,2}):(\d{2})SGT$/i);
