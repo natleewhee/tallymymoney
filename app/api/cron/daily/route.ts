@@ -16,8 +16,8 @@ import { desc } from "drizzle-orm";
 import { bot } from "@/lib/telegram/bot";
 import { db } from "@/lib/db";
 import { transactions, unclassifiedEmails } from "@/lib/schema";
-import { formatRangeReport } from "@/lib/telegram/reports";
-import { formatSgtDateTime, previousMonthRange } from "@/lib/sgt";
+import { computeRangeSummary, formatRangeReport } from "@/lib/telegram/reports";
+import { currentMonthRange, formatSgtDateTime, previousMonthRange, previousMonthToDateRange } from "@/lib/sgt";
 
 export const runtime = "nodejs";
 
@@ -97,10 +97,35 @@ export async function GET(req: Request): Promise<Response> {
     heartbeat = "check-failed";
   }
 
-  // --- Monthly report: 1st of the month, SGT ---
   const nowSgt = new Date(Date.now() + 8 * 60 * 60 * 1000);
+
+  // --- Weekly nudge: Mondays, SGT — item 23. The only automatic report
+  // was on the 1st, covering a month Nat could no longer influence by
+  // the time it arrived; a mid-month, month-to-date check-in is the
+  // moment feedback could actually change a decision. Alongside the
+  // 1st-of-month report, not instead of it — a nudge failing to send
+  // must not block that separate report below.
+  let weeklyNudge = "not-monday";
+  if (nowSgt.getUTCDay() === 1) {
+    try {
+      const { start, end } = currentMonthRange();
+      const prevRange = previousMonthToDateRange();
+      const prevSummary = await computeRangeSummary(prevRange.start, prevRange.end);
+      const report = await formatRangeReport("Week-in Check-in — Month to Date", start, end, {
+        label: "same point last month",
+        total: prevSummary.total,
+      });
+      await bot.api.sendMessage(chatId, report);
+      weeklyNudge = "sent";
+    } catch (err) {
+      console.error("weekly nudge failed to send", err);
+      weeklyNudge = "failed";
+    }
+  }
+
+  // --- Monthly report: 1st of the month, SGT ---
   if (nowSgt.getUTCDate() !== 1) {
-    return Response.json({ status: "no-op", reason: "not the 1st", heartbeat });
+    return Response.json({ status: "no-op", reason: "not the 1st", heartbeat, weeklyNudge });
   }
 
   const { start, end, label } = previousMonthRange();
@@ -112,8 +137,8 @@ export async function GET(req: Request): Promise<Response> {
     // throw, return 500, and there is no retry — the month's report would
     // simply never arrive and nothing would say so.
     console.error(`monthly report for ${label} failed to send`, err);
-    return Response.json({ status: "report-failed", period: label, heartbeat }, { status: 500 });
+    return Response.json({ status: "report-failed", period: label, heartbeat, weeklyNudge }, { status: 500 });
   }
 
-  return Response.json({ status: "sent", period: label, heartbeat });
+  return Response.json({ status: "sent", period: label, heartbeat, weeklyNudge });
 }

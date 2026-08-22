@@ -47,7 +47,12 @@ export async function notifyNewTransaction(txId: number): Promise<void> {
     : undefined;
 
   const directionEmoji = tx.direction === "debit" ? "💳" : "💰";
-  const fxNote = tx.fxSource === "spot_estimate" ? "\n⚠️ SGD amount is an estimate — reply with the real figure once confirmed" : "";
+  const fxNote =
+    tx.fxSource === "spot_estimate"
+      ? "\n⚠️ SGD amount is an estimate — reply with the real figure once confirmed"
+      : tx.fxSource === "placeholder"
+        ? "\n🚫 No FX rate was available — this SGD amount is a 1:1 placeholder and is excluded from your totals until you reply with the real figure"
+        : "";
 
   const lines = [
     `${directionEmoji} ${tx.direction === "debit" ? "NEW TRANSACTION" : "MONEY IN"}`,
@@ -143,12 +148,15 @@ export async function notifyFxPending(txId: number): Promise<void> {
   const [tx] = await db.select().from(transactions).where(eq(transactions.id, txId));
   if (!tx) return;
 
+  const isPlaceholder = tx.fxSource === "placeholder";
   const text = [
-    `💱 SGD ESTIMATE UNCONFIRMED — #${tx.id}`,
+    isPlaceholder ? `🚫 NO FX RATE AVAILABLE — #${tx.id}` : `💱 SGD ESTIMATE UNCONFIRMED — #${tx.id}`,
     "",
     `Merchant: ${tx.merchantRaw ?? "(none given)"}`,
     `Original: ${fmtAmount(tx.amountCents, tx.currency)}`,
-    `Estimated: SGD ${(tx.sgdAmountCents / 100).toFixed(2)}`,
+    isPlaceholder
+      ? `Placeholder (excluded from totals): SGD ${(tx.sgdAmountCents / 100).toFixed(2)}`
+      : `Estimated: SGD ${(tx.sgdAmountCents / 100).toFixed(2)}`,
     `Date: ${formatSgtDateTime(tx.occurredAt)}`,
     "",
     "Reply to this message with the real SGD figure from your statement to confirm.",
