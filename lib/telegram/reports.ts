@@ -32,6 +32,12 @@ export interface RangeSummary {
   uncategorizedTotal: number;
   untaggedCount: number;
   fxEstimatedCount: number;
+  /** Rows with no real FX rate available at all (defect 11) — excluded
+   * from every total above rather than summed at a 1:1 placeholder that
+   * could be wrong by an unbounded factor. placeholderExcludedTotal is
+   * what they'd have added, shown so the gap is visible, not silent. */
+  placeholderCount: number;
+  placeholderExcludedTotal: number;
   pendingParserCount: number;
   /** Non-ignored rows actually folded into the totals above — what the
    * "N transaction(s)" line should say, not the raw row count. */
@@ -80,13 +86,14 @@ export async function computeRangeSummary(start: Date, end: Date): Promise<Range
   let joint = 0;
   let untaggedCount = 0;
   let fxEstimatedCount = 0;
+  let placeholderCount = 0;
+  let placeholderExcludedTotal = 0;
   let txCount = 0;
   let uncategorizedTotal = 0;
   const byCategory = new Map<string, number>();
 
   for (const t of rows) {
     if (t.status === "ignored") continue;
-    txCount += 1;
 
     const net = t.sgdAmountCents - (reductionByTarget.get(t.id) ?? 0);
     // A credit not routed through Reduce (a standalone refund, a PayNow
@@ -94,6 +101,19 @@ export async function computeRangeSummary(start: Date, end: Date): Promise<Range
     // previously these were read and counted but contributed nothing,
     // so the total silently overstated spend.
     const signed = t.direction === "debit" ? net : -net;
+
+    // Defect 11: no real rate was available for this one, so sgd_amount_cents
+    // is a 1:1 placeholder, not a conversion — could be off by an unbounded
+    // factor for a weak currency. Excluded entirely rather than summed as
+    // if it were real; declared via placeholderCount/placeholderExcludedTotal
+    // instead.
+    if (t.fxSource === "placeholder") {
+      placeholderCount += 1;
+      placeholderExcludedTotal += signed;
+      continue;
+    }
+
+    txCount += 1;
     if (t.direction === "credit") moneyIn += net;
 
     total += signed;
@@ -119,6 +139,8 @@ export async function computeRangeSummary(start: Date, end: Date): Promise<Range
     uncategorizedTotal,
     untaggedCount,
     fxEstimatedCount,
+    placeholderCount,
+    placeholderExcludedTotal,
     pendingParserCount,
     txCount,
   };
@@ -140,6 +162,9 @@ export async function formatRangeReport(
   if (s.txCount === 0) {
     const lines = [`📊 ${title.toUpperCase()}`, "", "No transactions."];
     if (comparison) lines.push(`📈 vs ${comparison.label}: ${fmtSgd(s.total)} vs ${fmtSgd(comparison.total)}`);
+    if (s.placeholderCount > 0) {
+      lines.push(`🚫 ${s.placeholderCount} excluded — no FX rate available (≈${fmtSgd(s.placeholderExcludedTotal)} not counted) — see /estimates`);
+    }
     if (s.pendingParserCount > 0) {
       lines.push(`⚠️ ${s.pendingParserCount} email pattern(s) still awaiting a parser — see /pending`);
     }
@@ -167,6 +192,9 @@ export async function formatRangeReport(
   lines.push("", `📈 ${s.txCount} transaction(s)`);
   if (s.untaggedCount > 0) lines.push(`⚠️ ${s.untaggedCount} untagged`);
   if (s.fxEstimatedCount > 0) lines.push(`⚠️ ${s.fxEstimatedCount} carrying an unconfirmed FX estimate — see /estimates`);
+  if (s.placeholderCount > 0) {
+    lines.push(`🚫 ${s.placeholderCount} excluded — no FX rate available (≈${fmtSgd(s.placeholderExcludedTotal)} not counted) — see /estimates`);
+  }
   if (s.pendingParserCount > 0) lines.push(`⚠️ ${s.pendingParserCount} email pattern(s) awaiting a parser — see /pending`);
 
   return lines.join("\n");
@@ -181,7 +209,7 @@ export async function formatPendingReport(): Promise<string> {
   const fxEstimates = await db
     .select()
     .from(transactions)
-    .where(eq(transactions.fxSource, "spot_estimate"));
+    .where(sql`${transactions.fxSource} IN ('spot_estimate','placeholder')`);
 
   const needsParser = await db
     .select()

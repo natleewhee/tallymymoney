@@ -1,6 +1,6 @@
 import { Bot, InputFile } from "grammy";
-import { createHash } from "node:crypto";
-import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
+import { createHash, randomUUID } from "node:crypto";
+import { and, asc, desc, eq, gte, isNull, sql } from "drizzle-orm";
 import { db } from "../db";
 import { merchantRules, senderRules, settlements, tagUndoLog, transactions, unclassifiedEmails } from "../schema";
 import { CATEGORIES } from "../categories";
@@ -31,6 +31,11 @@ import { queueLabelRemoval } from "../gmail-labels";
 // notifications into the chat at once; the summary still reports
 // the true total, so nothing is hidden.
 const PENDING_TAGGABLE_LIMIT = 10;
+
+// Defect 6: how far back Reduce candidates reach. Bounded so a refund
+// can't be offered against a purchase old enough that the two are
+// unlikely to actually be related.
+const REDUCE_CANDIDATE_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set");
@@ -110,9 +115,12 @@ function describeTagged(
   return `✅ ${amount} ${verb} ${who} (${splitLabel})`;
 }
 
-async function markTagged(txId: number, category: string, split: "solo" | "joint") {
+/** Returns false (no-op) if the transaction is already gone — item 15:
+ * previously this returned silently and every caller went on to show a
+ * success confirmation for a tag that never happened. */
+async function markTagged(txId: number, category: string, split: "solo" | "joint"): Promise<boolean> {
   const [tx] = await db.select().from(transactions).where(eq(transactions.id, txId));
-  if (!tx) return;
+  if (!tx) return false;
 
   // Credits must not write merchant memory. A refund from a person, or a
   // PayNow transfer in, is not evidence about what a future *payment* to
@@ -156,6 +164,7 @@ async function markTagged(txId: number, category: string, split: "solo" | "joint
       await db.insert(merchantRules).values({ merchantNormalised: key, category, defaultSplit: split });
     }
   }
+  return true;
 }
 
 bot.on("callback_query:data", async (ctx) => {
@@ -165,9 +174,16 @@ bot.on("callback_query:data", async (ctx) => {
   try {
     switch (action) {
       case "c": {
-        // FR-8 step 1: category chosen, now ask split.
-        const [txId, catIdxStr] = rest;
-        const category = CATEGORIES[Number(catIdxStr)];
+        // FR-8 step 1: category chosen, now ask split. `category` is the
+        // name itself (item 16), not an array index — but a button
+        // rendered before this change is still sitting in old chat
+        // history encoding an index, so guard against a stale tap
+        // resolving to garbage instead of a real category.
+        const [txId, category] = rest;
+        if (!(CATEGORIES as readonly string[]).includes(category)) {
+          await ctx.answerCallbackQuery("This button is from before an update — use /pending to re-tag");
+          return;
+        }
         await db.update(transactions).set({ category }).where(eq(transactions.id, Number(txId)));
         await ctx.editMessageReplyMarkup({ reply_markup: splitKeyboard(Number(txId)) });
         await ctx.answerCallbackQuery(`Category: ${category}`);
@@ -181,7 +197,10 @@ bot.on("callback_query:data", async (ctx) => {
           await ctx.answerCallbackQuery("Pick a category first");
           return;
         }
-        await markTagged(Number(txId), tx.category, split as "solo" | "joint");
+        if (!(await markTagged(Number(txId), tx.category, split as "solo" | "joint"))) {
+          await ctx.answerCallbackQuery("Transaction not found — it may have been deleted or undone");
+          return;
+        }
         await ctx.editMessageText(describeTagged(tx, split as "solo" | "joint"));
         await ctx.answerCallbackQuery("Tagged");
         return;
@@ -190,7 +209,10 @@ bot.on("callback_query:data", async (ctx) => {
         // FR-7: confirm the pre-filled category/split in one tap.
         const [txId] = rest;
         const [tx] = await db.select().from(transactions).where(eq(transactions.id, Number(txId)));
-        if (!tx?.merchantRaw) return;
+        if (!tx?.merchantRaw) {
+          await ctx.answerCallbackQuery("Transaction not found").catch(() => {});
+          return;
+        }
         const key = normaliseMerchant(tx.merchantRaw);
         const [rule] = await db.select().from(merchantRules).where(eq(merchantRules.merchantNormalised, key));
         if (!rule) {
@@ -199,7 +221,10 @@ bot.on("callback_query:data", async (ctx) => {
           return;
         }
         if (rule.defaultSplit) {
-          await markTagged(Number(txId), rule.category, rule.defaultSplit as "solo" | "joint");
+          if (!(await markTagged(Number(txId), rule.category, rule.defaultSplit as "solo" | "joint"))) {
+            await ctx.answerCallbackQuery("Transaction not found — it may have been deleted or undone");
+            return;
+          }
           await ctx.editMessageText(describeTagged(tx, rule.defaultSplit as "solo" | "joint"));
         } else {
           await db.update(transactions).set({ category: rule.category }).where(eq(transactions.id, Number(txId)));
@@ -224,7 +249,12 @@ bot.on("callback_query:data", async (ctx) => {
         return;
       }
       case "r": {
-        // FR-21: reduce — show a short list of recent debit transactions to net against.
+        // FR-21: reduce — show a short list of recent debit transactions
+        // to net against. Defect 6: bounded to the last 30 days — an
+        // unbounded "5 most recent" could offer a three-week-old
+        // purchase with nothing distinguishing it from yesterday's,
+        // and netting a refund against the wrong one is a silent money
+        // error (the report just shows a different, wrong number).
         const [txId] = rest;
         const candidates = await db
           .select()
@@ -233,6 +263,7 @@ bot.on("callback_query:data", async (ctx) => {
             and(
               eq(transactions.direction, "debit"),
               isNull(transactions.reducesTransactionId),
+              gte(transactions.occurredAt, new Date(Date.now() - REDUCE_CANDIDATE_WINDOW_MS)),
               sql`${transactions.id} != ${Number(txId)}`,
             ),
           )
@@ -240,7 +271,7 @@ bot.on("callback_query:data", async (ctx) => {
           .limit(5);
 
         if (candidates.length === 0) {
-          await ctx.answerCallbackQuery("No recent transactions to reduce");
+          await ctx.answerCallbackQuery("No transactions in the last 30 days to reduce");
           return;
         }
         const options = candidates.map((c) => ({
@@ -256,6 +287,29 @@ bot.on("callback_query:data", async (ctx) => {
       case "rt": {
         // FR-21: target chosen — link and close out the reducing row.
         const [sourceId, targetId] = rest;
+        const [source] = await db.select().from(transactions).where(eq(transactions.id, Number(sourceId)));
+        const [target] = await db.select().from(transactions).where(eq(transactions.id, Number(targetId)));
+        if (!source || !target) {
+          await ctx.answerCallbackQuery("Transaction not found").catch(() => {});
+          return;
+        }
+
+        // Defect 6: nothing previously stopped a reduction larger than
+        // its target — reports.ts nets sgd_amount_cents minus reductions
+        // with no floor, so an over-sized one pushes a category total
+        // negative with no flag anywhere. Reject rather than link.
+        const [{ alreadyReduced }] = await db
+          .select({ alreadyReduced: sql<number>`coalesce(sum(${transactions.sgdAmountCents}), 0)::int` })
+          .from(transactions)
+          .where(eq(transactions.reducesTransactionId, Number(targetId)));
+        const remaining = target.sgdAmountCents - alreadyReduced;
+        if (source.sgdAmountCents > remaining) {
+          await ctx.answerCallbackQuery(
+            `Exceeds remaining balance — #${targetId} has ${fmtSgd(remaining)} left to reduce`,
+          );
+          return;
+        }
+
         await db
           .update(transactions)
           .set({ reducesTransactionId: Number(targetId), status: "tagged", taggedAt: new Date() })
@@ -336,7 +390,10 @@ bot.on("callback_query:data", async (ctx) => {
         // FR-20a: ignore this (sender, subject) pattern permanently.
         const [uneId] = rest;
         const [row] = await db.select().from(unclassifiedEmails).where(eq(unclassifiedEmails.id, Number(uneId)));
-        if (!row) return;
+        if (!row) {
+          await ctx.answerCallbackQuery("Already handled").catch(() => {});
+          return;
+        }
         await db
           .insert(senderRules)
           .values({ sender: row.sender, subject: row.subject ?? "", action: "ignore" })
@@ -359,7 +416,10 @@ bot.on("callback_query:data", async (ctx) => {
         // FR-20b: queue for a real parser, stop re-alerting on this pattern.
         const [uneId] = rest;
         const [row] = await db.select().from(unclassifiedEmails).where(eq(unclassifiedEmails.id, Number(uneId)));
-        if (!row) return;
+        if (!row) {
+          await ctx.answerCallbackQuery("Already handled").catch(() => {});
+          return;
+        }
         await db
           .insert(senderRules)
           .values({ sender: row.sender, subject: row.subject ?? "", action: "needs_parser" })
@@ -409,7 +469,7 @@ bot.on("message:text", async (ctx, next) => {
   const text = ctx.message.text.trim();
   const isBareNumber = /^\d+(\.\d{1,2})?$/.test(text);
 
-  if (tx.fxSource === "spot_estimate" && isBareNumber) {
+  if ((tx.fxSource === "spot_estimate" || tx.fxSource === "placeholder") && isBareNumber) {
     const sgdAmountCents = Math.round(parseFloat(text) * 100);
     await db
       .update(transactions)
@@ -431,11 +491,18 @@ bot.command("help", async (ctx) => {
       "/week — Last 7 days",
       "/month — This month, by category",
       "/pending — Transactions and email patterns awaiting action",
+      "/add <amount> <merchant> — Log a cash spend, e.g. /add 12.50 Kopitiam",
       "/partner — Shareable summary + settle-up figure for this month",
       "/export — CSV export for this month",
       "/rules — List/clear ignore or needs-parser rules",
       "/undo — Revert the last tag (and its merchant rule)",
       "/estimates — List transactions with an unconfirmed FX estimate",
+      "/merchants — Merchant memory, sorted by how often each rule fires",
+      "",
+      "ON A TRANSACTION MESSAGE",
+      "Reply with a bare number (e.g. 130.50) to confirm an unconfirmed FX amount — only works while it's still flagged, and only on the notification itself (tagging replaces it, so use /estimates to get it back).",
+      "Reply with any other text to set that transaction's description.",
+      "↩️ Reduce nets a refund/reversal off an earlier purchase instead of tagging it as a new expense.",
     ].join("\n"),
   );
 });
@@ -501,6 +568,48 @@ bot.command("pending", async (ctx) => {
   }
 });
 
+/** Item 12: cash (hawker, kopitiam, wet market) leaves no email and was
+ * previously invisible with nothing declaring the gap — /month presented
+ * itself as "your spending" when it was really "your card + PayNow
+ * spending." Manual entry, run through the exact same tagging flow as an
+ * ingested transaction so merchant memory and reporting treat it
+ * identically. Usage: /add 12.50 Kopitiam. */
+bot.command("add", async (ctx) => {
+  const raw = ctx.match.trim();
+  const m = raw.match(/^(\d+(?:\.\d{1,2})?)\s+(.+)$/s);
+  if (!m) {
+    await ctx.reply("Usage: /add <amount> <merchant>\ne.g. /add 12.50 Kopitiam");
+    return;
+  }
+  const [, amountStr, merchant] = m;
+  const amountCents = Math.round(parseFloat(amountStr) * 100);
+  if (amountCents <= 0) {
+    await ctx.reply("Amount must be greater than zero.");
+    return;
+  }
+
+  const [row] = await db
+    .insert(transactions)
+    .values({
+      // No email backs a cash entry, but email_message_id is NOT NULL
+      // UNIQUE — a synthetic id keeps it a real key without implying a
+      // real message exists.
+      emailMessageId: `cash:${randomUUID()}`,
+      amountCents,
+      currency: "SGD",
+      sgdAmountCents: amountCents,
+      fxSource: "na",
+      direction: "debit",
+      merchantRaw: merchant.trim(),
+      merchantNormalised: normaliseMerchant(merchant.trim()),
+      bank: "Cash",
+      occurredAt: new Date(),
+    })
+    .returning({ id: transactions.id });
+
+  await notifyNewTransaction(row.id);
+});
+
 /** Lists everything still carrying an unconfirmed FX estimate — tagged
  * or not — and resends each so it can be replied to directly. Answers
  * the gap /pending left open: it counted these but never showed them,
@@ -510,7 +619,7 @@ bot.command("estimates", async (ctx) => {
   const rows = await db
     .select({ id: transactions.id })
     .from(transactions)
-    .where(eq(transactions.fxSource, "spot_estimate"))
+    .where(sql`${transactions.fxSource} IN ('spot_estimate','placeholder')`)
     .orderBy(desc(transactions.occurredAt));
 
   if (rows.length === 0) {
@@ -588,6 +697,31 @@ bot.command("undo", async (ctx) => {
   await ctx.reply(`↩️ Undone — ${what} is ${restored}.`);
 });
 
+// Item 10: hitCount was tracked on every tag but never surfaced anywhere,
+// so there was no way to tell whether merchant memory — the product's
+// central premise — was actually working. Capped and sorted by hitCount
+// so the merchants actually worth checking are at the top.
+const MERCHANTS_LIST_LIMIT = 30;
+
+bot.command("merchants", async (ctx) => {
+  const rules = await db
+    .select()
+    .from(merchantRules)
+    .orderBy(desc(merchantRules.hitCount))
+    .limit(MERCHANTS_LIST_LIMIT);
+
+  if (rules.length === 0) {
+    await ctx.reply("No merchant memory yet — it builds up as you tag transactions.");
+    return;
+  }
+
+  const lines = ["🏷 MERCHANT MEMORY", ""];
+  for (const r of rules) {
+    lines.push(`${r.merchantNormalised} — ${r.category}${r.defaultSplit ? ` / ${r.defaultSplit}` : ""} (${r.hitCount}×)`);
+  }
+  await ctx.reply(lines.join("\n"));
+});
+
 // Lets Nat see and undo "ignore"/"needs_parser" sender_rules from the
 // bot instead of raw SQL — needed now that a stale rule can silently
 // block a whole bank's alerts (see the dispatch-first note in
@@ -638,30 +772,75 @@ bot.command("partner", async (ctx) => {
 });
 
 // FR-16 (P2): CSV export for the current month by default.
+/** Item 17: RFC 4180 quoting — a bare comma-to-semicolon swap (the old
+ * approach) leaves a literal quote or newline in a merchant name to
+ * produce a malformed row. Quote only when needed, doubling internal
+ * quotes, so simple fields still read cleanly unquoted. */
+function csvField(value: string | number): string {
+  const s = String(value);
+  if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
 bot.command("export", async (ctx) => {
   const { start, end } = currentMonthRange();
   const rows = await db
     .select()
     .from(transactions)
-    .where(and(sql`${transactions.occurredAt} >= ${start}`, sql`${transactions.occurredAt} < ${end}`))
+    .where(
+      and(
+        sql`${transactions.occurredAt} >= ${start}`,
+        sql`${transactions.occurredAt} < ${end}`,
+        // Matches formatRangeReport's scope — an ignored row (a
+        // verification hold, a refund, an own-account transfer) isn't
+        // part of any report total either, so it shouldn't be in a CSV
+        // meant to reconcile against one.
+        sql`${transactions.status} != 'ignored'`,
+      ),
+    )
     .orderBy(desc(transactions.occurredAt));
 
-  const header = "id,occurred_at,bank,merchant,amount,currency,sgd_amount,direction,category,split,status\n";
+  const columns = [
+    "id",
+    "occurred_at",
+    "bank",
+    "merchant",
+    "description",
+    "amount",
+    "currency",
+    "sgd_amount",
+    "fx_source",
+    "direction",
+    "category",
+    "split",
+    "status",
+    "account_identifier",
+    "reduces_transaction_id",
+    "tagged_at",
+  ];
+  const header = columns.join(",") + "\n";
   const body = rows
     .map((r) =>
       [
         r.id,
         r.occurredAt.toISOString(),
         r.bank,
-        (r.merchantRaw ?? "").replace(/,/g, ";"),
+        r.merchantRaw ?? "",
+        r.description ?? "",
         (r.amountCents / 100).toFixed(2),
         r.currency,
         (r.sgdAmountCents / 100).toFixed(2),
+        r.fxSource,
         r.direction,
         r.category ?? "",
         r.split ?? "",
         r.status,
-      ].join(","),
+        r.accountIdentifier ?? "",
+        r.reducesTransactionId ?? "",
+        r.taggedAt ? r.taggedAt.toISOString() : "",
+      ]
+        .map(csvField)
+        .join(","),
     )
     .join("\n");
 

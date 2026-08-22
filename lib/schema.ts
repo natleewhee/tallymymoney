@@ -73,14 +73,19 @@ export const transactions = pgTable(
     ),
     check("status_check", sql`${table.status} IN ('pending','tagged','ignored')`),
     check(
+      // 'placeholder': no live rate and nothing in this currency to
+      // borrow a rate from (defect 11) — unlike 'spot_estimate' this
+      // isn't a real conversion at all, so reports must exclude it from
+      // totals rather than silently summing a number that could be off
+      // by an unbounded factor. Both still need confirming via FR-22.
       "fx_source_check",
-      sql`${table.fxSource} IN ('na','spot_estimate','confirmed')`,
+      sql`${table.fxSource} IN ('na','spot_estimate','placeholder','confirmed')`,
     ),
     index("idx_tx_occurred").on(table.occurredAt.desc()),
     index("idx_tx_status").on(table.status).where(sql`${table.status} = 'pending'`),
     index("idx_tx_fx_estimate")
       .on(table.id)
-      .where(sql`${table.fxSource} = 'spot_estimate'`),
+      .where(sql`${table.fxSource} IN ('spot_estimate','placeholder')`),
   ],
 );
 
@@ -148,11 +153,22 @@ export const unclassifiedEmails = pgTable(
     // false, labels the Gmail thread, then acks — see that route and
     // apps-script/forward-to-ingest.gs.
     labeledInGmail: boolean("labeled_in_gmail").notNull().default(false),
+
+    // Which of textBody/htmlBody rawEmail was taken from, set at ingest
+    // time. Null for rows written before this column existed — recovery.ts
+    // falls back to its old regex guess only for those. Recorded rather
+    // than re-derived because the guess (looksLikeHtml) can misfire on
+    // plain text that happens to contain something like <jane@x.com>.
+    bodyFormat: text("body_format"),
   },
   (table) => [
     check(
       "unclassified_status_check",
       sql`${table.status} IN ('pending_review','ignored','needs_parser')`,
+    ),
+    check(
+      "body_format_check",
+      sql`${table.bodyFormat} IN ('text','html') OR ${table.bodyFormat} IS NULL`,
     ),
     index("idx_unclassified")
       .on(table.status)

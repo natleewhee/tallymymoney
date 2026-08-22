@@ -1,10 +1,16 @@
 import { InlineKeyboard } from "grammy";
 import { CATEGORIES } from "../categories";
 
+/** Item 16: encodes the category name directly rather than its index
+ * into CATEGORIES. callback_data lives in Telegram message history
+ * indefinitely, so an index-encoded button sitting un-tapped in old chat
+ * history would silently resolve to a different category the moment
+ * CATEGORIES is reordered. Names are well within Telegram's 64-byte
+ * callback_data limit even for the longest one here. */
 export function categoryKeyboard(txId: number): InlineKeyboard {
   const kb = new InlineKeyboard();
   CATEGORIES.forEach((cat, i) => {
-    kb.text(cat, `c:${txId}:${i}`);
+    kb.text(cat, `c:${txId}:${cat}`);
     if (i % 2 === 1) kb.row();
   });
   return kb;

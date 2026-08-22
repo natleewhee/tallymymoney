@@ -7,7 +7,9 @@ import { transactions, unclassifiedEmails, senderRules } from "@/lib/schema";
 import { eq, and } from "drizzle-orm";
 import { dispatch, type InboundEmail } from "@/lib/parsers";
 import { convertToSgd } from "@/lib/fx";
+import { normaliseMerchant } from "@/lib/merchant";
 import { notifyNewTransaction, notifyParseFailure, notifyUnclassified } from "@/lib/telegram/notify";
+import { isUniqueViolation } from "@/lib/db-utils";
 
 export const runtime = "nodejs";
 
@@ -18,11 +20,6 @@ interface IngestBody {
   textBody?: string;
   htmlBody?: string;
   receivedAt: string; // ISO 8601, from the email's Date header
-}
-
-function isUniqueViolation(err: unknown): boolean {
-  const code = (err as { code?: string } | undefined)?.code;
-  return code === "23505";
 }
 
 export async function POST(req: Request): Promise<Response> {
@@ -79,6 +76,7 @@ export async function POST(req: Request): Promise<Response> {
           sender: email.from,
           subject: email.subject,
           rawEmail: email.htmlBody || email.textBody,
+          bodyFormat: email.htmlBody ? "html" : "text",
           status: "needs_parser",
         });
       } catch (err) {
@@ -98,6 +96,7 @@ export async function POST(req: Request): Promise<Response> {
           sender: email.from,
           subject: email.subject,
           rawEmail: email.htmlBody || email.textBody,
+          bodyFormat: email.htmlBody ? "html" : "text",
           status: "pending_review",
         })
         .returning({ id: unclassifiedEmails.id });
@@ -137,9 +136,12 @@ export async function POST(req: Request): Promise<Response> {
     } else {
       // No live rate and no prior transaction in this currency to borrow
       // from — genuinely rare. 1:1 is a placeholder, not a real
-      // conversion; still flagged as an estimate so FR-15/FR-22 catch it.
+      // conversion — defect 11: reports.ts excludes 'placeholder' rows
+      // from every total rather than summing a number that could be off
+      // by an unbounded factor. Still flagged and reachable via
+      // /estimates and reply-to-confirm, same as a real spot estimate.
       sgdAmountCents = transaction.amountCents;
-      fxSource = "spot_estimate";
+      fxSource = "placeholder";
       fxRate = "1";
     }
   }
@@ -157,6 +159,7 @@ export async function POST(req: Request): Promise<Response> {
         fxRate,
         direction: transaction.direction,
         merchantRaw: transaction.merchantRaw,
+        merchantNormalised: transaction.merchantRaw ? normaliseMerchant(transaction.merchantRaw) : null,
         bank: transaction.bank,
         accountIdentifier: transaction.accountIdentifier,
         occurredAt: transaction.occurredAt,

@@ -17,8 +17,10 @@ import { db } from "./db";
 import { transactions, unclassifiedEmails } from "./schema";
 import { dispatch, type InboundEmail } from "./parsers";
 import { convertToSgd } from "./fx";
+import { normaliseMerchant } from "./merchant";
 import { notifyNewTransaction } from "./telegram/notify";
 import { queueLabelRemoval } from "./gmail-labels";
+import { isUniqueViolation } from "./db-utils";
 
 /** Re-sends alerts for transactions that were stored but never announced. */
 export async function resendUnnotified(): Promise<{ sent: number; failed: number }> {
@@ -42,21 +44,24 @@ export async function resendUnnotified(): Promise<{ sent: number; failed: number
 }
 
 /** Rebuilds the parser input from a stored raw_email. Ingest keeps
- * `htmlBody || textBody`, so which field it came from is no longer
- * recorded — infer it, since bestText() prefers plain text and running
- * an HTML strip over plain text would mangle it. */
+ * `htmlBody || textBody`, so which field it came from isn't recoverable
+ * from the content alone — item 18: newer rows record it directly in
+ * body_format at ingest time, so this only has to guess (and can misfire
+ * on plain text containing something like <jane@example.com>) for rows
+ * written before that column existed. */
 function toInboundEmail(row: {
   sender: string;
   subject: string | null;
   rawEmail: string;
   receivedAt: Date;
+  bodyFormat: string | null;
 }): InboundEmail {
-  const looksLikeHtml = /<[a-z][\s\S]*>/i.test(row.rawEmail);
+  const isHtml = row.bodyFormat ? row.bodyFormat === "html" : /<[a-z][\s\S]*>/i.test(row.rawEmail);
   return {
     from: row.sender,
     subject: row.subject ?? "",
-    textBody: looksLikeHtml ? "" : row.rawEmail,
-    htmlBody: looksLikeHtml ? row.rawEmail : "",
+    textBody: isHtml ? "" : row.rawEmail,
+    htmlBody: isHtml ? row.rawEmail : "",
     receivedAt: row.receivedAt,
   };
 }
@@ -92,7 +97,9 @@ export async function retryUnparsed(): Promise<{ recovered: number; stillFailing
         fxSource = fx.fxSource;
         fxRate = String(fx.fxRate);
       } else {
-        fxSource = "spot_estimate";
+        // Same defect-11 placeholder case as the main ingest route — see
+        // its comment. Excluded from report totals until confirmed.
+        fxSource = "placeholder";
         fxRate = "1";
       }
     }
@@ -109,6 +116,7 @@ export async function retryUnparsed(): Promise<{ recovered: number; stillFailing
           fxRate,
           direction: transaction.direction,
           merchantRaw: transaction.merchantRaw,
+          merchantNormalised: transaction.merchantRaw ? normaliseMerchant(transaction.merchantRaw) : null,
           bank: transaction.bank,
           accountIdentifier: transaction.accountIdentifier,
           occurredAt: transaction.occurredAt,
@@ -135,6 +143,40 @@ export async function retryUnparsed(): Promise<{ recovered: number; stillFailing
         console.error(`recovered transaction ${inserted.id} not notified`, err);
       }
     } catch (err) {
+      // Item 19: the insert above and the delete that follows it aren't
+      // transactional (no Neon HTTP-driver wrapper anywhere in this
+      // codebase). If a *previous* run's delete failed after its insert
+      // succeeded, this row is stale — the transaction already exists —
+      // and this insert hits email_message_id's unique constraint. Left
+      // uncaught, that row would be recounted as "stillFailing" on every
+      // future run forever, and the message ("can't be read — forward it
+      // on") would be false: the parser worked fine, only the cleanup
+      // didn't finish.
+      if (isUniqueViolation(err)) {
+        const [existing] = await db
+          .select({ id: transactions.id, telegramMessageId: transactions.telegramMessageId })
+          .from(transactions)
+          .where(eq(transactions.emailMessageId, row.emailMessageId));
+
+        if (row.labeledInGmail) {
+          await queueLabelRemoval(row.emailMessageId);
+        }
+        await db.delete(unclassifiedEmails).where(eq(unclassifiedEmails.id, row.id));
+        recovered += 1;
+
+        // The interrupted run may never have reached its own notify
+        // step either — finish that too rather than leaving the
+        // recovered transaction silently unannounced.
+        if (existing && existing.telegramMessageId === null) {
+          try {
+            await notifyNewTransaction(existing.id);
+          } catch (notifyErr) {
+            console.error(`recovered transaction ${existing.id} not notified`, notifyErr);
+          }
+        }
+        continue;
+      }
+
       console.error(`retry failed for unclassified email ${row.id}`, err);
       stillFailing += 1;
     }
