@@ -8,7 +8,9 @@
 //   (a) "Date & Time: / Amount: / From: / To:" table — PayLah spend,
 //       card spend, PayNow sent (samples 03, 04, 08)
 //   (b) inline "You have received SGD X via PayNow on <date> SGT." with
-//       From:/To: lines below, no table — PayNow received (sample 07)
+//       From:/To: lines below, no table — PayNow received (sample 07).
+//       Also covers "via FAST transfer" — confirmed real sample, same
+//       shape otherwise, so it shares this parser rather than a copy.
 //
 // Direction/merchant/account are inferred from which of From:/To: names
 // an instrument Nat owns ("card ending", "Wallet", "Account ... ending").
@@ -74,8 +76,13 @@ function parseTableShape(text: string, receivedAt: Date): ParsedTransaction | nu
 
 function parseInlineReceivedShape(text: string, receivedAt: Date): ParsedTransaction | null {
   // "You have received SGD 200.00 via PayNow on 11 Aug 2026 17:17 SGT."
+  // "You have received SGD 912.44 via FAST transfer on 26 Aug 2026 21:48
+  //  SGT." — confirmed real sample, identical shape otherwise (same
+  // From:/To: lines, same date format). No ParsedTransaction field
+  // distinguishes the rail, so both alternatives share this one parser
+  // rather than needing a separate function.
   const m = text.match(
-    /You have received\s+(SGD\s*[\d,]+\.\d+)\s+via PayNow on\s+\d{1,2}\s+[A-Za-z]{3,}\s+(\d{4})\s+(\d{1,2}:\d{2})\s*SGT/i,
+    /You have received\s+(SGD\s*[\d,]+\.\d+)\s+via\s+(?:PayNow|FAST transfer) on\s+\d{1,2}\s+[A-Za-z]{3,}\s+(\d{4})\s+(\d{1,2}:\d{2})\s*SGT/i,
   );
   if (!m) return null;
   const amountCents = parseAmount(m[1]);
