@@ -167,3 +167,12 @@ export async function notifyFxPending(txId: number): Promise<void> {
   // last held this id — same reasoning as /pending's resend.
   await db.update(transactions).set({ telegramMessageId: msg.message_id }).where(eq(transactions.id, tx.id));
 }
+
+/** A parser's parseNotice() result — a shape that's understood but never
+ * becomes a transaction (a declined attempt, a card-verification
+ * failure). No transaction to link a reply to, so this is just the
+ * message, sent as-is. */
+export async function notifyNotice(text: string): Promise<void> {
+  if (!CHAT_ID) throw new Error("TELEGRAM_CHAT_ID is not set");
+  await bot.api.sendMessage(CHAT_ID, text);
+}

@@ -8,7 +8,7 @@ import { eq, and } from "drizzle-orm";
 import { dispatch, type InboundEmail } from "@/lib/parsers";
 import { convertToSgd } from "@/lib/fx";
 import { normaliseMerchant } from "@/lib/merchant";
-import { notifyNewTransaction, notifyParseFailure, notifyUnclassified } from "@/lib/telegram/notify";
+import { notifyNewTransaction, notifyNotice, notifyParseFailure, notifyUnclassified } from "@/lib/telegram/notify";
 import { isUniqueViolation } from "@/lib/db-utils";
 
 export const runtime = "nodejs";
@@ -66,9 +66,22 @@ export async function POST(req: Request): Promise<Response> {
   // handles fine. Confirmed 2026-08-19 as the cause of a missed UOB
   // transaction. Parsing first means a parser fix immediately un-blocks
   // future good emails without Nat having to clear the rule by hand.
-  const { bank, transaction } = dispatch(email);
+  const { bank, transaction, notice } = dispatch(email);
 
   if (!transaction) {
+    // Recognised as a real event that will never become a transaction —
+    // a declined attempt, a card-verification failure — so it never
+    // touches unclassified_emails or FR-4/R3 triage at all. Nat just
+    // needs to know now.
+    if (notice) {
+      try {
+        await notifyNotice(notice);
+      } catch (err) {
+        console.error("notice email received but Telegram send failed", err);
+      }
+      return Response.json({ status: "notice-sent" });
+    }
+
     if (rule?.action === "needs_parser") {
       try {
         await db.insert(unclassifiedEmails).values({

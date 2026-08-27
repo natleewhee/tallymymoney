@@ -18,7 +18,7 @@ import { transactions, unclassifiedEmails } from "./schema";
 import { dispatch, type InboundEmail } from "./parsers";
 import { convertToSgd } from "./fx";
 import { normaliseMerchant } from "./merchant";
-import { notifyNewTransaction } from "./telegram/notify";
+import { notifyNewTransaction, notifyNotice } from "./telegram/notify";
 import { queueLabelRemoval } from "./gmail-labels";
 import { isUniqueViolation } from "./db-utils";
 
@@ -81,8 +81,25 @@ export async function retryUnparsed(): Promise<{ recovered: number; stillFailing
 
   for (const row of stuck) {
     const email = toInboundEmail(row);
-    const { transaction } = dispatch(email);
+    const { transaction, notice } = dispatch(email);
     if (!transaction) {
+      // A row filed before a parser recognised this as a no-transaction
+      // notice (a decline, a card-verification failure) — same cleanup
+      // as a normal recovery, minus the insert: send the notice now,
+      // then clear the row so it stops being counted as stuck.
+      if (notice) {
+        try {
+          await notifyNotice(notice);
+        } catch (err) {
+          console.error(`notice for unclassified email ${row.id} not sent`, err);
+        }
+        if (row.labeledInGmail) {
+          await queueLabelRemoval(row.emailMessageId);
+        }
+        await db.delete(unclassifiedEmails).where(eq(unclassifiedEmails.id, row.id));
+        recovered += 1;
+        continue;
+      }
       stillFailing += 1;
       continue;
     }

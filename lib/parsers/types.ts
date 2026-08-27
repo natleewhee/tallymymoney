@@ -30,6 +30,15 @@ export interface BankParser {
    * matched" and routes to unclassified_emails (FR-4).
    */
   parse(email: InboundEmail): ParsedTransaction | null;
+  /**
+   * Optional: recognises a shape that is understood but never becomes a
+   * transaction — a declined attempt, a card-verification failure,
+   * anything where no money actually moved. Checked only when parse()
+   * returns null. Return the plain-text message to send Nat directly,
+   * or null if this shape isn't recognised either (falls through to
+   * FR-4 triage as usual).
+   */
+  parseNotice?(email: InboundEmail): string | null;
 }
 
 /** Prefer the plain-text body; fall back to a stripped HTML body. Two of
