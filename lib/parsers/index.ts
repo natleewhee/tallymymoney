@@ -12,6 +12,15 @@ export const parsers: BankParser[] = [dbsParser, uobParser, trustParser, citiban
 export interface DispatchResult {
   bank: string | null;
   transaction: ParsedTransaction | null;
+  /** Set when parse() found no transaction but the parser's optional
+   * parseNotice() recognised the shape anyway — a declined attempt, a
+   * card-verification failure, anything real but with no money that
+   * ever moved. Nothing belongs in the ledger for it, but Nat should
+   * still hear about it immediately rather than it being filed as
+   * FR-4/R3 triage (which would misleadingly ask him to forward it on
+   * "so a parser can be built" for a shape that's already understood and
+   * will never become a transaction). */
+  notice: string | null;
 }
 
 /** Finds the bank by sender, then tries to parse. Distinguishes "no bank
@@ -30,14 +39,17 @@ export function dispatch(email: InboundEmail): DispatchResult {
       // here (this parser can't read this email), so treat it that way
       // and let FR-4 triage do its job.
       try {
-        return { bank: parser.bank, transaction: parser.parse(email) };
+        const transaction = parser.parse(email);
+        if (transaction) return { bank: parser.bank, transaction, notice: null };
+        const notice = parser.parseNotice?.(email) ?? null;
+        return { bank: parser.bank, transaction: null, notice };
       } catch (err) {
         console.error(`${parser.bank} parser threw, routing to triage`, err);
-        return { bank: parser.bank, transaction: null };
+        return { bank: parser.bank, transaction: null, notice: null };
       }
     }
   }
-  return { bank: null, transaction: null };
+  return { bank: null, transaction: null, notice: null };
 }
 
 export type { BankParser, InboundEmail, ParsedTransaction };

@@ -111,6 +111,34 @@ function parseOverseasRefund(text: string): ParsedTransaction | null {
   };
 }
 
+function parseDeclinedNotice(text: string): string | null {
+  // "Your txn of SGD 11.52 using Trust card at KOPITIAM FP APP PAYMENTS
+  //  63805858     SG has been declined on 24 Aug 2026 18:56SGT. Do top
+  //  up your account."
+  //
+  // No money moved — there's nothing for a ledger to record. Recording
+  // it as a debit (even at zero) would misrepresent a failed attempt as
+  // a transaction; recording the stated amount would be worse, silently
+  // inflating spend for money that was never actually charged. This is
+  // real, actionable information Nat should see now (his card just
+  // failed), so it gets a direct message instead of either sitting in
+  // the ledger wrong or being routed to FR-4/R3 triage asking him to
+  // forward on a shape that's already understood.
+  const m = text.match(
+    /Your txn of\s+(SGD\s*[\d,]+\.\d+)\s+using\s+([^\n]+?)\s+card at\s+(.+?)\s+has been declined on\s+(\d{1,2}\s+[A-Za-z]{3,}\s+\d{4}\s+\d{1,2}:\d{2}SGT)/i,
+  );
+  if (!m) return null;
+  const [, amountStr, cardName, merchant] = m;
+  return [
+    "🚫 DECLINED — nothing was charged",
+    "",
+    `${amountStr.trim()} at ${cleanMerchant(merchant)}`,
+    `Card: ${cardName.trim()}`,
+    "",
+    "Top up your account if this wasn't intentional.",
+  ].join("\n");
+}
+
 export const trustParser: BankParser = {
   bank: "Trust",
   matchesSender(from: string): boolean {
@@ -127,5 +155,10 @@ export const trustParser: BankParser = {
       parseOverseasRefund(text) ??
       null
     );
+  },
+  parseNotice(email: InboundEmail): string | null {
+    const text = bestText(email, stripHtml);
+    if (!text) return null;
+    return parseDeclinedNotice(text);
   },
 };
