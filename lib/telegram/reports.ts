@@ -6,6 +6,7 @@
 import { and, eq, gte, lt, sql } from "drizzle-orm";
 import { db } from "../db";
 import { transactions, unclassifiedEmails } from "../schema";
+import { formatSgtDateTime } from "../sgt";
 
 export function fmtSgd(cents: number): string {
   const sign = cents < 0 ? "-" : "";
@@ -225,6 +226,20 @@ export async function formatPendingReport(): Promise<string> {
     lines.push("", "UNTAGGED");
     for (const t of untagged.slice(0, 10)) {
       lines.push(`#${t.id} — ${fmtSgd(t.sgdAmountCents)} ${t.merchantRaw ?? "(no merchant)"}`);
+    }
+  }
+
+  // Previously this count had nowhere to point back to — "2 email
+  // pattern(s) awaiting a parser" with no way to tell which two, so the
+  // only lead was whatever Gmail label happened to still be showing (and
+  // that label lags a 5-minute Apps Script poll on both ends, so it's
+  // not reliable moment-to-moment either). Listing sender/subject/date
+  // here means Nat can go straight to Gmail search for the exact thread
+  // regardless of label state.
+  if (needsParser.length > 0) {
+    lines.push("", "NEEDS PARSER");
+    for (const e of needsParser.slice(0, 10)) {
+      lines.push(`#${e.id} — ${e.sender} — "${e.subject ?? "(no subject)"}" (${formatSgtDateTime(e.receivedAt)})`);
     }
   }
 
