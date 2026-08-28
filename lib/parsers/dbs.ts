@@ -35,9 +35,20 @@ function parseAmount(s: string): number {
   return Math.round(parseFloat(m[1].replace(/,/g, "")) * 100);
 }
 
+function parseGenericAmount(s: string): number {
+  const m = s.match(/([\d,]+\.\d+)/);
+  if (!m) throw new Error(`No amount found in: "${s}"`);
+  return Math.round(parseFloat(m[1].replace(/,/g, "")) * 100);
+}
+
 function parseTableShape(text: string, receivedAt: Date): ParsedTransaction | null {
   const dtMatch = text.match(/Date\s*&\s*Time:\s*([^\n(]+?)\s*\(SGT\)/i);
-  const amtMatch = text.match(/Amount:\s*(SGD\s*[\d,]+\.\d+)/i);
+  // Currency captured rather than pinned to SGD — confirmed real sample:
+  // a card transaction in USD ("Amount: USD96.68") uses this exact table
+  // shape (Transaction Ref / Date & Time / Amount / From / To), just
+  // with a foreign-currency line. FX conversion happens downstream in
+  // /api/ingest (FR-2), same as every other foreign-currency parser here.
+  const amtMatch = text.match(/Amount:\s*([A-Z]{3})\s*([\d,]+\.\d+)/i);
   const fromMatch = text.match(/From:\s*([^\n]+)/i);
   const toMatch = text.match(/To:\s*([^\n]+)/i);
   if (!dtMatch || !amtMatch || !fromMatch || !toMatch) return null;
@@ -45,14 +56,15 @@ function parseTableShape(text: string, receivedAt: Date): ParsedTransaction | nu
   const fromValue = fromMatch[1].trim();
   const toValue = toMatch[1].trim();
   const occurredAt = parseDbsTableDate(dtMatch[1], receivedAt);
-  const amountCents = parseAmount(amtMatch[1]);
+  const currency = amtMatch[1].toUpperCase();
+  const amountCents = parseGenericAmount(amtMatch[2]);
 
   const toIsOwnAccount = OWN_INSTRUMENT.test(toValue) && /your/i.test(toValue);
   if (toIsOwnAccount && !OWN_INSTRUMENT.test(fromValue)) {
     // Money arriving into an account of Nat's — credit.
     return {
       amountCents,
-      currency: "SGD",
+      currency,
       direction: "credit",
       merchantRaw: cleanMerchant(fromValue),
       bank: "DBS",
@@ -65,7 +77,7 @@ function parseTableShape(text: string, receivedAt: Date): ParsedTransaction | nu
   // PayLah spend, card spend, and PayNow sent in every real sample seen.
   return {
     amountCents,
-    currency: "SGD",
+    currency,
     direction: "debit",
     merchantRaw: cleanMerchant(toValue),
     bank: "DBS",
