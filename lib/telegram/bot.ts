@@ -84,11 +84,24 @@ bot.command("whoami", async (ctx) => {
  * identical to the bot doing nothing at all, and the only way to see it
  * is digging through Vercel's function logs. Send it to the chat
  * instead, so a command that fails says so instead of going silent. */
-bot.catch((err) => {
+// grammY awaits this handler (`await this.errorHandler(err)` in
+// Bot.handleUpdate) before webhookCallback resolves the HTTP response —
+// confirmed 2026-08-28 after a command that threw (a query against a
+// table that didn't exist yet in Neon) produced no message at all, not
+// even this one. The previous version fired sendMessage without
+// awaiting it, so the promise raced the serverless function being
+// frozen the moment the response went out: exactly the silent-failure
+// class this handler exists to prevent, just one layer further in. Must
+// stay async and actually await the send.
+bot.catch(async (err) => {
   console.error("Unhandled bot error", err.error);
   if (!OWNER_CHAT_ID) return;
   const message = err.error instanceof Error ? err.error.message : String(err.error);
-  bot.api.sendMessage(OWNER_CHAT_ID, `⚠️ Something broke: ${message}`).catch(() => {});
+  try {
+    await bot.api.sendMessage(OWNER_CHAT_ID, `⚠️ Something broke: ${message}`);
+  } catch (sendErr) {
+    console.error("Also failed to send the error notification", sendErr);
+  }
 });
 
 /** Stable short identifier for a sender_rule, used as callback data on
