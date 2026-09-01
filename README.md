@@ -2,7 +2,7 @@
 
 A personal Telegram bot that reads Singapore bank transaction-alert emails, asks one question per transaction, and reports monthly.
 
-**Status: building.** Strategy and SPIKE-01's format/extraction evidence are done; coverage (the actual go/no-go number) is still being measured in the background while this builds in parallel — Nat's call, recorded in `docs/STRATEGY.md` §3.
+**Status: live, in daily personal use.** See [`docs/HANDOVER.md`](docs/HANDOVER.md) for current state — the docs below this line are the pre-build design record and haven't all been updated since. The one thing `docs/STRATEGY.md` §3 named as a real go/no-go gate — bank alert coverage — was never formally re-measured once building proceeded ahead of it; in practice it hasn't been a problem, but see `docs/HANDOVER.md`'s Open items.
 
 ---
 
@@ -10,6 +10,7 @@ A personal Telegram bot that reads Singapore bank transaction-alert emails, asks
 
 | Document | What it is |
 |---|---|
+| [`docs/HANDOVER.md`](docs/HANDOVER.md) | **Start here.** Current state, what's shipped beyond the original PRD, open items, conventions for continuing work |
 | [`docs/STRATEGY.md`](docs/STRATEGY.md) | Locked decisions, phasing, what was cut and why, live risks |
 | [`docs/SPIKE-01-email-parsing.md`](docs/SPIKE-01-email-parsing.md) | The go/no-go validation protocol — coverage still running |
 | [`docs/SPIKE-01-RESULTS.md`](docs/SPIKE-01-RESULTS.md) | Real sample evidence and the decisions it forced (FX handling, reversal handling, unrecognised-email triage) |
