@@ -6,7 +6,7 @@
 import type { BankParser, InboundEmail, ParsedTransaction } from "./types";
 import { bestText, cleanMerchant } from "./types";
 import { stripHtml } from "./html";
-import { parseUobLongDate, parseUobReversalDate, parseUobShortDate } from "./dates";
+import { parseUobLongDate, parseUobRefundDate, parseUobReversalDate, parseUobShortDate } from "./dates";
 
 function parseAmount(s: string): number {
   const m = s.match(/SGD\s*([\d,]+\.\d+)/i);
@@ -84,6 +84,30 @@ function parseCardReversal(text: string): ParsedTransaction | null {
   };
 }
 
+/** "A refund of SGD416.76 from Klook Travel has been made to your UOB
+ * card ending 0997 on 11 Aug 2026. The refund will be posted in your
+ * next statement." Confirmed real sample — distinct from parseCardReversal:
+ * a merchant-initiated refund posted to the statement, not an immediate
+ * transaction reversal, and worded (and dated) differently. Currency
+ * pinned to SGD, same as card spend — no foreign-currency refund sample
+ * seen yet. */
+function parseRefund(text: string, receivedAt: Date): ParsedTransaction | null {
+  const m = text.match(
+    /A refund of\s+(SGD\s*[\d,]+\.\d+)\s+from\s+(.+?)\s+has been made to your UOB card ending\s+([A-Za-z0-9]+)\s+on\s+(\d{1,2}\s+[A-Za-z]{3,}\s+\d{4})\.?/i,
+  );
+  if (!m) return null;
+  const [, amountStr, merchant, last4, dateStr] = m;
+  return {
+    amountCents: parseAmount(amountStr),
+    currency: "SGD",
+    direction: "credit",
+    merchantRaw: cleanMerchant(merchant),
+    bank: "UOB",
+    accountIdentifier: last4,
+    occurredAt: parseUobRefundDate(dateStr, receivedAt),
+  };
+}
+
 export const uobParser: BankParser = {
   bank: "UOB",
   matchesSender(from: string): boolean {
@@ -93,6 +117,12 @@ export const uobParser: BankParser = {
     const text = bestText(email, stripHtml);
     if (!text) return null;
 
-    return parseCardSpend(text, email.receivedAt) ?? parsePayNowReceived(text) ?? parseCardReversal(text) ?? null;
+    return (
+      parseCardSpend(text, email.receivedAt) ??
+      parsePayNowReceived(text) ??
+      parseCardReversal(text) ??
+      parseRefund(text, email.receivedAt) ??
+      null
+    );
   },
 };
