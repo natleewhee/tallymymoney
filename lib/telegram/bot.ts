@@ -19,6 +19,7 @@ import {
   currentMonthRange,
   formatSgtDateTime,
   last7DaysRange,
+  monthBoundsFor,
   previousMonthToDateRange,
   todayRange,
 } from "../sgt";
@@ -338,9 +339,19 @@ bot.on("callback_query:data", async (ctx) => {
         return;
       }
       case "ps": {
-        // FR-19: /partner's "mark settled" button. Always the current
-        // calendar month — /partner never offers a past month to settle.
-        const { start, end } = currentMonthBounds();
+        // FR-19: "mark settled" — /partner's button carries no period
+        // (rest is empty) and always means the current calendar month;
+        // the automatic monthly report's button encodes YYYY-MM (rest[0])
+        // since by the time it's tapped the calendar may have already
+        // rolled to a new month.
+        let start: Date;
+        let end: Date;
+        if (rest[0]) {
+          const [y, mo] = rest[0].split("-").map(Number);
+          ({ start, end } = monthBoundsFor(y, mo - 1));
+        } else {
+          ({ start, end } = currentMonthBounds());
+        }
         const [existing] = await db
           .select()
           .from(settlements)
