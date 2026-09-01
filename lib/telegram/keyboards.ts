@@ -91,9 +91,18 @@ export function rulesKeyboard(rules: { key: string; label: string }[]): InlineKe
   return kb;
 }
 
-/** /partner: logs a settlement for the current calendar month. Always
- * "the current month" rather than an encoded period — /partner never
- * offers a past month to settle, so there's nothing to disambiguate. */
-export function partnerSettleKeyboard(): InlineKeyboard {
-  return new InlineKeyboard().text("✅ Mark settled this month", "ps");
+/** /partner: logs a settlement for the current calendar month by default —
+ * /partner never offers a past month to settle, so a bare "ps" (no
+ * disambiguation needed) keeps that button unchanged from before.
+ *
+ * The automatic monthly report settles a specific past month instead, so
+ * it passes `period` to encode YYYY-MM into callback_data — a bare "ps"
+ * tapped after the calendar has rolled to a new month would otherwise
+ * silently resolve to the wrong (current, not reported) month. */
+export function partnerSettleKeyboard(period?: { year: number; month0: number; label: string }): InlineKeyboard {
+  if (!period) {
+    return new InlineKeyboard().text("✅ Mark settled this month", "ps");
+  }
+  const ym = `${period.year}-${String(period.month0 + 1).padStart(2, "0")}`;
+  return new InlineKeyboard().text(`✅ Mark ${period.label} settled`, `ps:${ym}`);
 }

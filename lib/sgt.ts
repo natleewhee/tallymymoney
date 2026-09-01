@@ -44,6 +44,12 @@ export function formatSgtDateTime(date: Date): string {
   }).format(date);
 }
 
+function monthBounds(year: number, month0: number): { start: Date; end: Date } {
+  const start = new Date(Date.UTC(year, month0, 1) - SGT_OFFSET_MS);
+  const end = new Date(Date.UTC(year, month0 + 1, 1) - SGT_OFFSET_MS);
+  return { start, end };
+}
+
 /** Full calendar month boundaries in SGT — unlike currentMonthRange's end
  * (deliberately "tomorrow", so a same-day report never misses a
  * same-day transaction), this stays fixed for the whole month. Needed
@@ -52,11 +58,14 @@ export function formatSgtDateTime(date: Date): string {
  * has to mean the same thing on the 3rd and on the 29th. */
 export function currentMonthBounds(now = new Date()): { start: Date; end: Date } {
   const sgtNow = new Date(now.getTime() + SGT_OFFSET_MS);
-  const y = sgtNow.getUTCFullYear();
-  const m = sgtNow.getUTCMonth();
-  const start = new Date(Date.UTC(y, m, 1) - SGT_OFFSET_MS);
-  const end = new Date(Date.UTC(y, m + 1, 1) - SGT_OFFSET_MS);
-  return { start, end };
+  return monthBounds(sgtNow.getUTCFullYear(), sgtNow.getUTCMonth());
+}
+
+/** Same bounds as currentMonthBounds, for an arbitrary named month —
+ * needed by the settle-up callback when it's marking a past month (the
+ * automatic monthly report's period), not always "now". */
+export function monthBoundsFor(year: number, month0: number): { start: Date; end: Date } {
+  return monthBounds(year, month0);
 }
 
 /** Same day-of-month cutoff, one calendar month back — e.g. called on the
@@ -78,18 +87,49 @@ export function previousMonthToDateRange(now = new Date()): { start: Date; end: 
   return { start, end };
 }
 
-/** Previous calendar month — used by the automatic monthly report (FR-14),
- * which reports on the month that just ended, not the one in progress. */
-export function previousMonthRange(now = new Date()): { start: Date; end: Date; label: string } {
-  const sgtNow = new Date(now.getTime() + SGT_OFFSET_MS);
-  const y = sgtNow.getUTCFullYear();
-  const m = sgtNow.getUTCMonth();
-  const start = new Date(Date.UTC(y, m - 1, 1) - SGT_OFFSET_MS);
-  const end = new Date(Date.UTC(y, m, 1) - SGT_OFFSET_MS);
-  const label = new Date(Date.UTC(y, m - 1, 1)).toLocaleString("en-SG", {
+function monthLabel(year: number, month0: number): string {
+  return new Date(Date.UTC(year, month0, 1)).toLocaleString("en-SG", {
     month: "long",
     year: "numeric",
     timeZone: "UTC",
   });
-  return { start, end, label };
+}
+
+/** Previous calendar month — used by the automatic monthly report (FR-14),
+ * which reports on the month that just ended, not the one in progress.
+ * year/month0 identify the reported month itself (not "now") — used to
+ * key the settlement record and the settle-up button's callback data, so
+ * marking it settled after the calendar has rolled to a new month still
+ * resolves to the right period. */
+export function previousMonthRange(now = new Date()): {
+  start: Date;
+  end: Date;
+  label: string;
+  year: number;
+  month0: number;
+} {
+  const sgtNow = new Date(now.getTime() + SGT_OFFSET_MS);
+  const y = sgtNow.getUTCFullYear();
+  const m = sgtNow.getUTCMonth();
+  const { start, end } = monthBounds(y, m - 1);
+  // Re-derive year/month0 from `start` (converted back to SGT) rather than
+  // reusing y/m-1 directly, so a January report (m-1 = -1) doesn't need
+  // its own rollover arithmetic — Date already normalised it.
+  const startSgt = new Date(start.getTime() + SGT_OFFSET_MS);
+  const year = startSgt.getUTCFullYear();
+  const month0 = startSgt.getUTCMonth();
+  return { start, end, label: monthLabel(year, month0), year, month0 };
+}
+
+/** The full calendar month before the one previousMonthRange reports on —
+ * the automatic monthly report's comparison baseline. Deliberately a full
+ * month against a full month (unlike /month's previousMonthToDateRange,
+ * which clips to a same-day cutoff): the automatic report always runs on
+ * the 1st against two already-complete months, so there's no
+ * still-in-progress month to clip for. */
+export function monthBeforePreviousRange(now = new Date()): { start: Date; end: Date; label: string } {
+  const { year, month0 } = previousMonthRange(now);
+  const { start, end } = monthBounds(year, month0 - 1);
+  const startSgt = new Date(start.getTime() + SGT_OFFSET_MS);
+  return { start, end, label: monthLabel(startSgt.getUTCFullYear(), startSgt.getUTCMonth()) };
 }

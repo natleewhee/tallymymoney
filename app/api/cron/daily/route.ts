@@ -12,12 +12,20 @@
 // See docs/LESSONS.md — this is the structural answer to that bug class,
 // rather than hunting silent failures one at a time.
 
-import { desc } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
+import { InputFile } from "grammy";
 import { bot } from "@/lib/telegram/bot";
 import { db } from "@/lib/db";
-import { transactions, unclassifiedEmails } from "@/lib/schema";
-import { computeRangeSummary, formatRangeReport } from "@/lib/telegram/reports";
-import { currentMonthRange, formatSgtDateTime, previousMonthRange, previousMonthToDateRange } from "@/lib/sgt";
+import { settlements, transactions, unclassifiedEmails } from "@/lib/schema";
+import { partnerSettleKeyboard } from "@/lib/telegram/keyboards";
+import { computeRangeSummary, fmtSgd, formatMonthlyMarkdown, formatRangeReport } from "@/lib/telegram/reports";
+import {
+  currentMonthRange,
+  formatSgtDateTime,
+  monthBeforePreviousRange,
+  previousMonthRange,
+  previousMonthToDateRange,
+} from "@/lib/sgt";
 
 export const runtime = "nodejs";
 
@@ -128,10 +136,50 @@ export async function GET(req: Request): Promise<Response> {
     return Response.json({ status: "no-op", reason: "not the 1st", heartbeat, weeklyNudge });
   }
 
-  const { start, end, label } = previousMonthRange();
+  const { start, end, label, year, month0 } = previousMonthRange();
   try {
-    const report = await formatRangeReport(`Monthly Report — ${label}`, start, end);
-    await bot.api.sendMessage(chatId, report);
+    const priorMonth = monthBeforePreviousRange();
+    const priorSummary = await computeRangeSummary(priorMonth.start, priorMonth.end);
+    const report = await formatRangeReport(`Monthly Report — ${label}`, start, end, {
+      label: priorMonth.label,
+      total: priorSummary.total,
+    });
+
+    // Settle-up section, mirroring /partner's own figure — computeRangeSummary
+    // is the same shared aggregation, so "joint total" here always agrees
+    // with what /partner would show for this period.
+    const [existingSettlement] = await db
+      .select()
+      .from(settlements)
+      .where(and(eq(settlements.periodStart, start), eq(settlements.periodEnd, end)));
+    const summary = await computeRangeSummary(start, end);
+    const half = Math.round(summary.joint / 2);
+
+    let settleLines = "";
+    let replyMarkup: ReturnType<typeof partnerSettleKeyboard> | undefined;
+    if (summary.joint > 0) {
+      if (existingSettlement) {
+        settleLines = `\n\n✅ Already settled — ${fmtSgd(existingSettlement.jointTotalCents)} joint, ${fmtSgd(existingSettlement.halfCents)} each.`;
+      } else {
+        settleLines = `\n\n💸 Joint total: ${fmtSgd(summary.joint)} — ${fmtSgd(half)} each if split evenly.`;
+        replyMarkup = partnerSettleKeyboard({ year, month0, label });
+      }
+    }
+
+    await bot.api.sendMessage(chatId, report + settleLines, replyMarkup ? { reply_markup: replyMarkup } : undefined);
+
+    // Detailed companion file — built from the same computeRangeSummary
+    // call the text report used, so the itemised list always reconciles
+    // with the totals above rather than risking a second, independent
+    // query drifting from them.
+    const markdown = await formatMonthlyMarkdown(`Monthly Report — ${label}`, start, end, {
+      label: priorMonth.label,
+      total: priorSummary.total,
+    });
+    await bot.api.sendDocument(
+      chatId,
+      new InputFile(Buffer.from(markdown, "utf-8"), `tallymymoney-${year}-${String(month0 + 1).padStart(2, "0")}.md`),
+    );
   } catch (err) {
     // Unguarded, a Neon cold-start timeout or a Telegram blip here would
     // throw, return 500, and there is no retry — the month's report would

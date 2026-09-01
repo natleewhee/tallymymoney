@@ -43,6 +43,23 @@ export interface RangeSummary {
   /** Non-ignored rows actually folded into the totals above — what the
    * "N transaction(s)" line should say, not the raw row count. */
   txCount: number;
+  /** Same rows counted into txCount, kept individually — the monthly
+   * markdown export's transaction list, so it reconciles exactly with
+   * the totals above rather than coming from a second query. */
+  lines: TransactionLine[];
+}
+
+export interface TransactionLine {
+  id: number;
+  occurredAt: Date;
+  bank: string;
+  merchantRaw: string | null;
+  category: string | null;
+  split: string | null;
+  direction: "debit" | "credit";
+  /** Net signed amount, same convention as RangeSummary.total: debit
+   * positive, credit negative. */
+  signedAmountCents: number;
 }
 
 /** Shared aggregation behind every report and behind /partner's
@@ -92,6 +109,7 @@ export async function computeRangeSummary(start: Date, end: Date): Promise<Range
   let txCount = 0;
   let uncategorizedTotal = 0;
   const byCategory = new Map<string, number>();
+  const lines: TransactionLine[] = [];
 
   for (const t of rows) {
     if (t.status === "ignored") continue;
@@ -129,6 +147,19 @@ export async function computeRangeSummary(start: Date, end: Date): Promise<Range
     }
 
     if (t.fxSource === "spot_estimate") fxEstimatedCount += 1;
+
+    lines.push({
+      id: t.id,
+      occurredAt: t.occurredAt,
+      bank: t.bank,
+      merchantRaw: t.merchantRaw,
+      category: t.category,
+      split: t.split,
+      // DB column is a plain text with a check constraint (schema.ts),
+      // not a narrowed type — the constraint is the guarantee here.
+      direction: t.direction as "debit" | "credit",
+      signedAmountCents: signed,
+    });
   }
 
   return {
@@ -144,6 +175,7 @@ export async function computeRangeSummary(start: Date, end: Date): Promise<Range
     placeholderExcludedTotal,
     pendingParserCount,
     txCount,
+    lines,
   };
 }
 
@@ -199,6 +231,81 @@ export async function formatRangeReport(
   if (s.pendingParserCount > 0) lines.push(`⚠️ ${s.pendingParserCount} email pattern(s) awaiting a parser — see /pending`);
 
   return lines.join("\n");
+}
+
+function fmtDayTime(date: Date): string {
+  // formatSgtDateTime renders "31 Aug 2026, 3:15 pm" — drop the year for
+  // a compact table cell; the report title already states the month.
+  return formatSgtDateTime(date).replace(/\d{4}, /, "");
+}
+
+/** Escapes markdown table cell content — pipes would otherwise break the
+ * row, and bank-derived merchant strings routinely contain them (see
+ * notify.ts's comment on the same class of character). */
+function escCell(s: string): string {
+  return s.replace(/\|/g, "\\|").replace(/\n/g, " ");
+}
+
+/** The monthly report's detailed companion file — a full itemised
+ * transaction list plus the same summary content as formatRangeReport,
+ * built from the same computeRangeSummary() call so the file always
+ * reconciles with the text message sent alongside it. */
+export async function formatMonthlyMarkdown(
+  title: string,
+  start: Date,
+  end: Date,
+  comparison?: ComparisonPeriod,
+): Promise<string> {
+  const s = await computeRangeSummary(start, end);
+  const out: string[] = [`# 📊 ${title}`, ""];
+
+  out.push("## Summary", "");
+  out.push(`- **Total:** ${fmtSgd(s.total)}`);
+  if (comparison) {
+    const delta = s.total - comparison.total;
+    const pct = comparison.total !== 0 ? ` (${delta >= 0 ? "+" : ""}${Math.round((delta / comparison.total) * 100)}%)` : "";
+    out.push(`- **vs ${comparison.label}:** ${fmtDelta(delta)}${pct} — was ${fmtSgd(comparison.total)}`);
+  }
+  if (s.moneyIn > 0) out.push(`- **Money in:** ${fmtSgd(s.moneyIn)} (already netted into total)`);
+  if (s.solo || s.joint) out.push(`- **Solo:** ${fmtSgd(s.solo)}  ·  **Joint:** ${fmtSgd(s.joint)}`);
+  out.push(`- **Transactions:** ${s.txCount}`, "");
+
+  if (s.byCategory.size > 0 || s.uncategorizedTotal !== 0) {
+    out.push("## By Category", "", "| Category | Amount |", "|---|---|");
+    for (const [cat, amt] of [...s.byCategory.entries()].sort((a, b) => b[1] - a[1])) {
+      out.push(`| ${escCell(cat)} | ${fmtSgd(amt)} |`);
+    }
+    if (s.uncategorizedTotal !== 0) out.push(`| Uncategorised | ${fmtSgd(s.uncategorizedTotal)} |`);
+    out.push("");
+  }
+
+  const incompleteness: string[] = [];
+  if (s.untaggedCount > 0) incompleteness.push(`${s.untaggedCount} untagged`);
+  if (s.fxEstimatedCount > 0) incompleteness.push(`${s.fxEstimatedCount} carrying an unconfirmed FX estimate — see /estimates`);
+  if (s.placeholderCount > 0) {
+    incompleteness.push(`${s.placeholderCount} excluded — no FX rate available (≈${fmtSgd(s.placeholderExcludedTotal)} not counted) — see /estimates`);
+  }
+  if (s.pendingParserCount > 0) incompleteness.push(`${s.pendingParserCount} email pattern(s) awaiting a parser — see /pending`);
+  if (incompleteness.length > 0) {
+    out.push("## Incompleteness", "");
+    for (const item of incompleteness) out.push(`- ${item}`);
+    out.push("");
+  }
+
+  out.push(`## Transactions (${s.lines.length})`, "");
+  if (s.lines.length === 0) {
+    out.push("No transactions.");
+  } else {
+    out.push("| Date | Merchant | Amount | Category | Split | Bank |", "|---|---|---|---|---|---|");
+    const sorted = [...s.lines].sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime());
+    for (const t of sorted) {
+      out.push(
+        `| ${fmtDayTime(t.occurredAt)} | ${escCell(t.merchantRaw ?? "(none given)")} | ${fmtSgd(t.signedAmountCents)} | ${escCell(t.category ?? "Uncategorised")} | ${escCell(t.split ?? "—")} | ${escCell(t.bank)} |`,
+      );
+    }
+  }
+
+  return out.join("\n");
 }
 
 export async function formatPendingReport(): Promise<string> {
