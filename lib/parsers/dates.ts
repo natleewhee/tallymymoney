@@ -111,6 +111,27 @@ export function parseUobReversalDate(s: string): Date {
   return sgtToUtc(2000 + Number(yyStr), month0, Number(dayStr), hour, Number(minuteStr));
 }
 
+/** UOB refund shape: "11 Aug 2026" — date only, no time given. Same
+ * situation as parseUobShortDate: the bank vouches only for the calendar
+ * day, so the hour/minute are borrowed from the email's own received
+ * time rather than fabricated as midnight (see parseUobShortDate's
+ * comment for why that matters). */
+export function parseUobRefundDate(s: string, receivedAt: Date): Date {
+  const m = s.trim().match(/^(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{4})$/);
+  if (!m) throw new Error(`Unrecognised UOB refund date format: "${s}"`);
+  const [, dayStr, monthStr, yearStr] = m;
+  const month0 = MONTHS[monthStr.slice(0, 3).toLowerCase()];
+  if (month0 === undefined) throw new Error(`Unrecognised month in UOB refund date: "${s}"`);
+  const sgtReceived = new Date(receivedAt.getTime() + SGT_OFFSET_MINUTES * 60 * 1000);
+  return sgtToUtc(
+    Number(yearStr),
+    month0,
+    Number(dayStr),
+    sgtReceived.getUTCHours(),
+    sgtReceived.getUTCMinutes(),
+  );
+}
+
 /** Trust: "16 Aug 2026 12:45SGT" — no space before the SGT suffix. */
 export function parseTrustDate(s: string): Date {
   const m = s.trim().match(/^(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{4})\s+(\d{1,2}):(\d{2})SGT$/i);
