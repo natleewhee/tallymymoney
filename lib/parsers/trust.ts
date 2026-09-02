@@ -25,16 +25,10 @@ function parseSpend(text: string): ParsedTransaction | null {
   // "You've spent SGD 20.30 at Cabcharge Asia Pte Ltd SINGAPORE SG on
   //  16 Aug 2026 12:45SGT with Freedom credit card."
   const m = text.match(
-    // "credit" is optional and \s+ (not a literal space) joins it to
-    // "card": the real sample line-wraps mid-phrase ("Freedom credit\ncard."),
-    // and a literal " card" right after the captured name previously
-    // swallowed "credit" into the card-name capture instead of stopping
-    // before it (real sample corrected this: accountIdentifier came back
-    // "Freedom credit" instead of "Freedom").
-    // Merchant capture uses [\s\S] rather than "." — a real sample wraps
-    // mid-merchant-name at the mail client's line width ("SINGAPORE\nSG"
-    // in 06-trust-partial-reversal.txt's near-identical template), which
-    // "." can't cross since it never matches a newline.
+    // "credit" is optional since the card name may be followed by "credit
+    // card" rather than "card" directly. Merchant and card-name captures
+    // use [\s\S] / \s+ (not "." or a literal space) so they can span a
+    // mid-phrase line wrap from the mail client.
     /You[''`']?ve spent\s+(SGD\s*[\d,]+\.\d+)\s+at\s+([\s\S]+?)\s+on\s+(\d{1,2}\s+[A-Za-z]{3,}\s+\d{4}\s+\d{1,2}:\d{2}SGT)\s+with\s+([^\n.]+?)\s+(?:credit\s+)?card/i,
   );
   if (!m) return null;
@@ -80,10 +74,8 @@ function parsePartialReversal(text: string): ParsedTransaction | null {
   //  SINGAPORE SG on 16 Aug 2026 12:45SGT. SGD 0.30 is released to your
   //  Freedom credit card."
   const m = text.match(
-    // Same optional-"credit" / \s+ fix as parseSpend above — the real
-    // sample wraps "Freedom credit\ncard." across the line break. Merchant
-    // capture also needs [\s\S] rather than "." — this sample additionally
-    // wraps mid-merchant-name ("SINGAPORE\nSG").
+    // Same optional-"credit" / line-wrap-tolerant captures as parseSpend
+    // above.
     /We[''`']?ve partially reversed your purchase at\s+([\s\S]+?)\s+on\s+(\d{1,2}\s+[A-Za-z]{3,}\s+\d{4}\s+\d{1,2}:\d{2}SGT)\.\s*(SGD\s*[\d,]+\.\d+)\s+is released to your\s+([^\n.]+?)\s+(?:credit\s+)?card/i,
   );
   if (!m) return null;
