@@ -16,12 +16,12 @@ import { db } from "@/lib/db";
 import { gmailLabelRemovals, unclassifiedEmails } from "@/lib/schema";
 import { and, eq, inArray } from "drizzle-orm";
 import { pendingLabelRemovals } from "@/lib/gmail-labels";
+import { secretsMatch } from "@/lib/db-utils";
 
 export const runtime = "nodejs";
 
 function checkSecret(req: Request): boolean {
-  const secret = req.headers.get("x-ingest-secret");
-  return !!secret && secret === process.env.INGEST_SECRET;
+  return secretsMatch(req.headers.get("x-ingest-secret"), process.env.INGEST_SECRET);
 }
 
 export async function GET(req: Request): Promise<Response> {

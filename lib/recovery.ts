@@ -16,7 +16,7 @@ import { and, eq, isNull, ne } from "drizzle-orm";
 import { db } from "./db";
 import { transactions, unclassifiedEmails } from "./schema";
 import { dispatch, type InboundEmail } from "./parsers";
-import { convertToSgd } from "./fx";
+import { resolveSgdAmount } from "./fx";
 import { normaliseMerchant } from "./merchant";
 import { notifyNewTransaction, notifyNotice } from "./telegram/notify";
 import { queueLabelRemoval } from "./gmail-labels";
@@ -104,22 +104,7 @@ export async function retryUnparsed(): Promise<{ recovered: number; stillFailing
       continue;
     }
 
-    let sgdAmountCents = transaction.amountCents;
-    let fxSource = "na";
-    let fxRate: string | null = null;
-    if (transaction.currency !== "SGD") {
-      const fx = await convertToSgd(transaction.currency, transaction.amountCents);
-      if (fx) {
-        sgdAmountCents = fx.sgdAmountCents;
-        fxSource = fx.fxSource;
-        fxRate = String(fx.fxRate);
-      } else {
-        // Same defect-11 placeholder case as the main ingest route — see
-        // its comment. Excluded from report totals until confirmed.
-        fxSource = "placeholder";
-        fxRate = "1";
-      }
-    }
+    const { sgdAmountCents, fxSource, fxRate } = await resolveSgdAmount(transaction.currency, transaction.amountCents);
 
     try {
       const [inserted] = await db

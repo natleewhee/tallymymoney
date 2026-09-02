@@ -6,10 +6,10 @@ import { db } from "@/lib/db";
 import { transactions, unclassifiedEmails, senderRules } from "@/lib/schema";
 import { eq, and } from "drizzle-orm";
 import { dispatch, type InboundEmail } from "@/lib/parsers";
-import { convertToSgd } from "@/lib/fx";
+import { resolveSgdAmount } from "@/lib/fx";
 import { normaliseMerchant } from "@/lib/merchant";
 import { notifyNewTransaction, notifyNotice, notifyParseFailure, notifyUnclassified } from "@/lib/telegram/notify";
-import { isUniqueViolation } from "@/lib/db-utils";
+import { isUniqueViolation, secretsMatch } from "@/lib/db-utils";
 
 export const runtime = "nodejs";
 
@@ -24,7 +24,7 @@ interface IngestBody {
 
 export async function POST(req: Request): Promise<Response> {
   const secret = req.headers.get("x-ingest-secret");
-  if (!secret || secret !== process.env.INGEST_SECRET) {
+  if (!secretsMatch(secret, process.env.INGEST_SECRET)) {
     return Response.json({ error: "unauthorised" }, { status: 401 });
   }
 
@@ -137,27 +137,7 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // FR-2/FR-22: spot-convert anything not already in SGD.
-  let sgdAmountCents = transaction.amountCents;
-  let fxSource = "na";
-  let fxRate: string | null = null;
-  if (transaction.currency !== "SGD") {
-    const fx = await convertToSgd(transaction.currency, transaction.amountCents);
-    if (fx) {
-      sgdAmountCents = fx.sgdAmountCents;
-      fxSource = fx.fxSource;
-      fxRate = String(fx.fxRate);
-    } else {
-      // No live rate and no prior transaction in this currency to borrow
-      // from — genuinely rare. 1:1 is a placeholder, not a real
-      // conversion — defect 11: reports.ts excludes 'placeholder' rows
-      // from every total rather than summing a number that could be off
-      // by an unbounded factor. Still flagged and reachable via
-      // /estimates and reply-to-confirm, same as a real spot estimate.
-      sgdAmountCents = transaction.amountCents;
-      fxSource = "placeholder";
-      fxRate = "1";
-    }
-  }
+  const { sgdAmountCents, fxSource, fxRate } = await resolveSgdAmount(transaction.currency, transaction.amountCents);
 
   let newTxId: number;
   try {
