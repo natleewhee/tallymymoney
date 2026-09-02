@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/**/*.test.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio"
@@ -25,6 +26,7 @@
     "@types/node": "^22.9.1",
     "@types/react": "^18.3.12",
     "drizzle-kit": "^0.28.1",
+    "tsx": "^4.19.2",
     "typescript": "^5.6.3"
   }
 }

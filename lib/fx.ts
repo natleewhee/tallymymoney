@@ -55,3 +55,28 @@ export async function convertToSgd(currency: string, amountCents: number): Promi
     fxSource: "spot_estimate",
   };
 }
+
+export interface ResolvedSgdAmount {
+  sgdAmountCents: number;
+  fxSource: string;
+  fxRate: string | null;
+}
+
+/** FR-2/FR-22: spot-convert anything not already in SGD, shared by the
+ * ingest route and recovery's retry path so the two can't drift on the
+ * defect-11 placeholder fallback (no live rate and no prior transaction
+ * in this currency to borrow from — genuinely rare). 1:1 is a
+ * placeholder, not a real conversion: reports.ts excludes 'placeholder'
+ * rows from every total rather than summing a number that could be off
+ * by an unbounded factor. Still flagged and reachable via /estimates and
+ * reply-to-confirm, same as a real spot estimate. */
+export async function resolveSgdAmount(currency: string, amountCents: number): Promise<ResolvedSgdAmount> {
+  if (currency === "SGD") {
+    return { sgdAmountCents: amountCents, fxSource: "na", fxRate: null };
+  }
+  const fx = await convertToSgd(currency, amountCents);
+  if (fx) {
+    return { sgdAmountCents: fx.sgdAmountCents, fxSource: fx.fxSource, fxRate: String(fx.fxRate) };
+  }
+  return { sgdAmountCents: amountCents, fxSource: "placeholder", fxRate: "1" };
+}

@@ -5,6 +5,7 @@ import { db } from "../db";
 import { merchantRules, senderRules, settlements, tagUndoLog, transactions, unclassifiedEmails } from "../schema";
 import { CATEGORIES } from "../categories";
 import { normaliseMerchant } from "../merchant";
+import { csvField } from "../csv";
 import {
   categoryKeyboard,
   partnerSettleKeyboard,
@@ -198,7 +199,15 @@ bot.on("callback_query:data", async (ctx) => {
           await ctx.answerCallbackQuery("This button is from before an update — use /pending to re-tag");
           return;
         }
-        await db.update(transactions).set({ category }).where(eq(transactions.id, Number(txId)));
+        const updated = await db
+          .update(transactions)
+          .set({ category })
+          .where(eq(transactions.id, Number(txId)))
+          .returning({ id: transactions.id });
+        if (updated.length === 0) {
+          await ctx.answerCallbackQuery("Transaction not found — it may have been deleted or undone");
+          return;
+        }
         await ctx.editMessageReplyMarkup({ reply_markup: splitKeyboard(Number(txId)) });
         await ctx.answerCallbackQuery(`Category: ${category}`);
         return;
@@ -796,16 +805,6 @@ bot.command("partner", async (ctx) => {
 });
 
 // FR-16 (P2): CSV export for the current month by default.
-/** Item 17: RFC 4180 quoting — a bare comma-to-semicolon swap (the old
- * approach) leaves a literal quote or newline in a merchant name to
- * produce a malformed row. Quote only when needed, doubling internal
- * quotes, so simple fields still read cleanly unquoted. */
-function csvField(value: string | number): string {
-  const s = String(value);
-  if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
-}
-
 bot.command("export", async (ctx) => {
   const { start, end } = currentMonthRange();
   const rows = await db

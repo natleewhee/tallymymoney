@@ -25,7 +25,17 @@ function parseSpend(text: string): ParsedTransaction | null {
   // "You've spent SGD 20.30 at Cabcharge Asia Pte Ltd SINGAPORE SG on
   //  16 Aug 2026 12:45SGT with Freedom credit card."
   const m = text.match(
-    /You[''`]?ve spent\s+(SGD\s*[\d,]+\.\d+)\s+at\s+(.+?)\s+on\s+(\d{1,2}\s+[A-Za-z]{3,}\s+\d{4}\s+\d{1,2}:\d{2}SGT)\s+with\s+([^\n.]+?)\s+card/i,
+    // "credit" is optional and \s+ (not a literal space) joins it to
+    // "card": the real sample line-wraps mid-phrase ("Freedom credit\ncard."),
+    // and a literal " card" right after the captured name previously
+    // swallowed "credit" into the card-name capture instead of stopping
+    // before it (real sample corrected this: accountIdentifier came back
+    // "Freedom credit" instead of "Freedom").
+    // Merchant capture uses [\s\S] rather than "." — a real sample wraps
+    // mid-merchant-name at the mail client's line width ("SINGAPORE\nSG"
+    // in 06-trust-partial-reversal.txt's near-identical template), which
+    // "." can't cross since it never matches a newline.
+    /You[''`']?ve spent\s+(SGD\s*[\d,]+\.\d+)\s+at\s+([\s\S]+?)\s+on\s+(\d{1,2}\s+[A-Za-z]{3,}\s+\d{4}\s+\d{1,2}:\d{2}SGT)\s+with\s+([^\n.]+?)\s+(?:credit\s+)?card/i,
   );
   if (!m) return null;
   const [, amountStr, merchant, dateStr, cardName] = m;
@@ -50,7 +60,7 @@ function parseOverseasSpend(text: string): ParsedTransaction | null {
   // template. FX conversion happens downstream in /api/ingest (FR-2),
   // not in this parser.
   const m = text.match(
-    /You[''`]?ve spent\s+([A-Z]{3})\s*([\d,]+\.\d+)\s+using\s+([^\n]+?)\s+credit card at\s+(.+?)\s+on\s+(\d{1,2}\s+[A-Za-z]{3,}\s+\d{4}\s+\d{1,2}:\d{2}SGT)/i,
+    /You[''`']?ve spent\s+([A-Z]{3})\s*([\d,]+\.\d+)\s+using\s+([^\n]+?)\s+credit card at\s+([\s\S]+?)\s+on\s+(\d{1,2}\s+[A-Za-z]{3,}\s+\d{4}\s+\d{1,2}:\d{2}SGT)/i,
   );
   if (!m) return null;
   const [, currency, amountStr, cardName, merchant, dateStr] = m;
@@ -70,7 +80,11 @@ function parsePartialReversal(text: string): ParsedTransaction | null {
   //  SINGAPORE SG on 16 Aug 2026 12:45SGT. SGD 0.30 is released to your
   //  Freedom credit card."
   const m = text.match(
-    /We[''`]?ve partially reversed your purchase at\s+(.+?)\s+on\s+(\d{1,2}\s+[A-Za-z]{3,}\s+\d{4}\s+\d{1,2}:\d{2}SGT)\.\s*(SGD\s*[\d,]+\.\d+)\s+is released to your\s+([^\n.]+?)\s+card/i,
+    // Same optional-"credit" / \s+ fix as parseSpend above — the real
+    // sample wraps "Freedom credit\ncard." across the line break. Merchant
+    // capture also needs [\s\S] rather than "." — this sample additionally
+    // wraps mid-merchant-name ("SINGAPORE\nSG").
+    /We[''`']?ve partially reversed your purchase at\s+([\s\S]+?)\s+on\s+(\d{1,2}\s+[A-Za-z]{3,}\s+\d{4}\s+\d{1,2}:\d{2}SGT)\.\s*(SGD\s*[\d,]+\.\d+)\s+is released to your\s+([^\n.]+?)\s+(?:credit\s+)?card/i,
   );
   if (!m) return null;
   const [, merchant, dateStr, amountStr, cardName] = m;
@@ -96,7 +110,7 @@ function parseOverseasRefund(text: string): ParsedTransaction | null {
   // the amount has no space after the currency here ("CNY1025.88") where
   // the overseas *spend* template has one — hence \s* in both.
   const m = text.match(
-    /We[''`]?ve refunded\s+([A-Z]{3})\s*([\d,]+\.\d+)\s+from\s+(.+?)\s+to your\s+([^\n]+?)\s+card on\s+(\d{1,2}\s+[A-Za-z]{3,}\s+\d{4}\s+\d{1,2}:\d{2}SGT)/i,
+    /We[''`']?ve refunded\s+([A-Z]{3})\s*([\d,]+\.\d+)\s+from\s+(.+?)\s+to your\s+([^\n]+?)\s+card on\s+(\d{1,2}\s+[A-Za-z]{3,}\s+\d{4}\s+\d{1,2}:\d{2}SGT)/i,
   );
   if (!m) return null;
   const [, currency, amountStr, merchant, cardName, dateStr] = m;
