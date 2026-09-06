@@ -116,10 +116,33 @@ CREATE TABLE transactions (
                                                  -- earlier row. Reporting nets it off the
                                                  -- referenced transaction and excludes this
                                                  -- row from independent totals
+  holiday_id             INT REFERENCES holidays(id),  -- holiday mode: set while a holiday
+                                                 -- is active at ingest time, or via
+                                                 -- /holiday tag for a pre-trip booking.
+                                                 -- A separate dimension from category, not
+                                                 -- a replacement — see holidays below
   raw_email              TEXT,                  -- kept: the only way to fix a bad parse
   telegram_message_id    BIGINT,
   created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   tagged_at              TIMESTAMPTZ
+);
+
+-- Holiday mode: while active, every transaction that arrives (arrival
+-- semantics, not occurred_at) gets tagged with holiday_id above,
+-- alongside its normal category. computeRangeSummary excludes tagged
+-- rows from ordinary date-scoped totals; computeHolidaySummary sums a
+-- holiday's rows regardless of date, so a trip spanning a month
+-- boundary still has one number. Manual lifecycle only (/holiday
+-- start|end) — no automatic detection.
+CREATE TABLE holidays (
+  id                SERIAL PRIMARY KEY,
+  name              TEXT NOT NULL,
+  started_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ended_at          TIMESTAMPTZ,             -- NULL while active; app-level (not DB-level)
+                                              -- guard against more than one active at a time
+  pinned_chat_id    TEXT,                    -- the pinned "still on holiday" reminder
+  pinned_message_id BIGINT,                  -- message, edited in place as spend comes in
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- merchant memory: the feature that keeps tagging to one tap
@@ -161,7 +184,9 @@ CREATE TABLE sender_rules (
 CREATE INDEX idx_tx_occurred    ON transactions (occurred_at DESC);
 CREATE INDEX idx_tx_status      ON transactions (status) WHERE status = 'pending';
 CREATE INDEX idx_tx_fx_estimate ON transactions (id) WHERE fx_source = 'spot_estimate';
+CREATE INDEX idx_tx_holiday     ON transactions (holiday_id) WHERE holiday_id IS NOT NULL;
 CREATE INDEX idx_unclassified   ON unclassified_emails (status) WHERE status != 'ignored';
+CREATE INDEX idx_holidays_active ON holidays (id) WHERE ended_at IS NULL;
 ```
 
 Deliberate departures from the dump:

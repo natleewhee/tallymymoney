@@ -21,6 +21,7 @@ import { normaliseMerchant } from "./merchant";
 import { notifyNewTransaction, notifyNotice } from "./telegram/notify";
 import { queueLabelRemoval } from "./gmail-labels";
 import { isUniqueViolation } from "./db-utils";
+import { getActiveHolidayId, refreshHolidayBanner } from "./holidays";
 
 /** Re-sends alerts for transactions that were stored but never announced. */
 export async function resendUnnotified(): Promise<{ sent: number; failed: number }> {
@@ -105,6 +106,11 @@ export async function retryUnparsed(): Promise<{ recovered: number; stillFailing
     }
 
     const { sgdAmountCents, fxSource, fxRate } = await resolveSgdAmount(transaction.currency, transaction.amountCents);
+    // Same arrival-semantics auto-tag as the main ingest route — a
+    // recovered email is being inserted now, so "is a holiday active
+    // right now" is the right check, not whatever was active when the
+    // original email first failed to parse.
+    const activeHolidayId = await getActiveHolidayId();
 
     try {
       const [inserted] = await db
@@ -123,8 +129,11 @@ export async function retryUnparsed(): Promise<{ recovered: number; stillFailing
           accountIdentifier: transaction.accountIdentifier,
           occurredAt: transaction.occurredAt,
           rawEmail: row.rawEmail,
+          holidayId: activeHolidayId,
         })
         .returning({ id: transactions.id });
+
+      if (activeHolidayId !== null) await refreshHolidayBanner(activeHolidayId);
 
       // Queue the Gmail label removal BEFORE deleting the row — the
       // delete takes emailMessageId with it, and that id is the only way

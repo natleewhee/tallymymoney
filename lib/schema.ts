@@ -18,6 +18,36 @@ import {
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 
+// Holiday mode: while a holiday is active, every transaction that
+// arrives gets holiday_id stamped on it (see transactions.holidayId)
+// alongside its normal category — a separate dimension, not a
+// replacement, so a trip's own category breakdown stays visible while
+// its spend is excluded from ordinary monthly/category totals. Declared
+// before `transactions` so that table's FK can reference it directly
+// without the lazy-callback trick reducesTransactionId needs for its
+// self-reference.
+export const holidays = pgTable(
+  "holidays",
+  {
+    id: serial("id").primaryKey(),
+    name: text("name").notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    // Null while the holiday is active. App-level (not DB-level) guard
+    // against more than one active holiday at a time — single-user bot,
+    // no concurrent writers, so a check-then-insert in lib/holidays.ts is
+    // sufficient without a partial-unique-index race to defend against.
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    // The pinned "still on holiday" banner message, so it can be edited
+    // in place as spend comes in and unpinned on /holiday end. Null until
+    // the pin actually succeeds (Telegram's pin can fail independently of
+    // the holiday starting) and after /holiday end unpins it.
+    pinnedChatId: text("pinned_chat_id"),
+    pinnedMessageId: bigint("pinned_message_id", { mode: "number" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("idx_holidays_active").on(table.id).where(sql`${table.endedAt} IS NULL`)],
+);
+
 export const transactions = pgTable(
   "transactions",
   {
@@ -58,6 +88,14 @@ export const transactions = pgTable(
       (): AnyPgColumn => transactions.id,
     ),
 
+    // Holiday mode: set while a holiday is active at ingest time (arrival
+    // semantics — a subscription that happens to bill mid-trip gets swept
+    // in same as everything else, correctable via /holiday untag) or via
+    // /holiday tag for a pre-trip booking. Independent of category —
+    // computeRangeSummary excludes tagged rows from ordinary totals,
+    // computeHolidaySummary sums them regardless of date.
+    holidayId: integer("holiday_id").references((): AnyPgColumn => holidays.id),
+
     rawEmail: text("raw_email"),
     telegramMessageId: bigint("telegram_message_id", { mode: "number" }),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -86,6 +124,7 @@ export const transactions = pgTable(
     index("idx_tx_fx_estimate")
       .on(table.id)
       .where(sql`${table.fxSource} IN ('spot_estimate','placeholder')`),
+    index("idx_tx_holiday").on(table.holidayId).where(sql`${table.holidayId} IS NOT NULL`),
   ],
 );
 
@@ -239,3 +278,4 @@ export type SenderRule = typeof senderRules.$inferSelect;
 export type TagUndoEntry = typeof tagUndoLog.$inferSelect;
 export type GmailLabelRemoval = typeof gmailLabelRemovals.$inferSelect;
 export type Settlement = typeof settlements.$inferSelect;
+export type Holiday = typeof holidays.$inferSelect;
