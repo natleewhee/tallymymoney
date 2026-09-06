@@ -16,7 +16,7 @@
 
 import { eq } from "drizzle-orm";
 import { db } from "../db";
-import { merchantRules, transactions } from "../schema";
+import { holidays, merchantRules, transactions } from "../schema";
 import { bot } from "./bot";
 import {
   confirmOrOverrideKeyboard,
@@ -46,6 +46,12 @@ export async function notifyNewTransaction(txId: number): Promise<void> {
     ? (await db.select().from(merchantRules).where(eq(merchantRules.merchantNormalised, merchantKey)))[0]
     : undefined;
 
+  // Holiday mode: the per-notification reminder — see lib/holidays.ts's
+  // pinned banner for the "glance up and check" half of the same design.
+  const holidayName = tx.holidayId
+    ? (await db.select({ name: holidays.name }).from(holidays).where(eq(holidays.id, tx.holidayId)))[0]?.name
+    : undefined;
+
   const directionEmoji = tx.direction === "debit" ? "💳" : "💰";
   const fxNote =
     tx.fxSource === "spot_estimate"
@@ -55,6 +61,7 @@ export async function notifyNewTransaction(txId: number): Promise<void> {
         : "";
 
   const lines = [
+    holidayName ? `🌴 ${holidayName}` : "",
     `${directionEmoji} ${tx.direction === "debit" ? "NEW TRANSACTION" : "MONEY IN"}`,
     "",
     `Amount: ${fmtAmount(tx.amountCents, tx.currency)}${tx.currency !== "SGD" ? ` (≈ SGD ${(tx.sgdAmountCents / 100).toFixed(2)})` : ""}`,

@@ -14,7 +14,14 @@ import {
   rulesKeyboard,
   splitKeyboard,
 } from "./keyboards";
-import { computeRangeSummary, fmtSgd, formatPendingReport, formatRangeReport } from "./reports";
+import {
+  computeHolidaySummary,
+  computeRangeSummary,
+  fmtSgd,
+  formatHolidayReport,
+  formatPendingReport,
+  formatRangeReport,
+} from "./reports";
 import {
   currentMonthBounds,
   currentMonthRange,
@@ -27,6 +34,17 @@ import {
 import { resendUnnotified, retryUnparsed } from "../recovery";
 import { notifyFxPending, notifyNewTransaction } from "./notify";
 import { queueLabelRemoval } from "../gmail-labels";
+import {
+  endActiveHoliday,
+  formatHolidayBannerText,
+  getActiveHoliday,
+  listHolidays,
+  recordPin,
+  refreshHolidayBanner,
+  resolveHolidayRef,
+  startHoliday,
+  tagTransactionHoliday,
+} from "../holidays";
 
 // How many untagged transactions /pending will re-send as tappable
 // messages. Capped so a long-neglected backlog does not dump fifty
@@ -531,6 +549,13 @@ bot.command("help", async (ctx) => {
       "/undo — Revert the last tag (and its merchant rule)",
       "/estimates — List transactions with an unconfirmed FX estimate",
       "/merchants — Merchant memory, sorted by how often each rule fires",
+      "/holiday start <name> — Begin holiday mode; tags new spend and pins a running total",
+      "/holiday end — End the active holiday",
+      "/holiday status — Show the active holiday, if any",
+      "/holiday tag <id> [name] — Tag a transaction to a holiday (the active one if none named)",
+      "/holiday untag <id> — Remove a transaction's holiday tag",
+      "/holiday report [name] — Total + category breakdown for a holiday (the active one if none named)",
+      "/holidays — List past and active holidays",
       "",
       "ON A TRANSACTION MESSAGE",
       "Reply with a bare number (e.g. 130.50) to confirm an unconfirmed FX amount — only works while it's still flagged, and only on the notification itself (tagging replaces it, so use /estimates to get it back).",
@@ -869,4 +894,167 @@ bot.command("export", async (ctx) => {
 
   const csv = header + body;
   await ctx.replyWithDocument(new InputFile(Buffer.from(csv, "utf-8"), "tallymymoney-export.csv"));
+});
+
+const HOLIDAY_USAGE = [
+  "Usage:",
+  "/holiday start <name> — begin holiday mode",
+  "/holiday end — end the active holiday",
+  "/holiday status — show the active holiday",
+  "/holiday tag <id> [name] — tag a transaction (active holiday if none named)",
+  "/holiday untag <id> — remove a transaction's holiday tag",
+  "/holiday report [name] — total + category breakdown (active holiday if none named)",
+].join("\n");
+
+/** Resolves a holiday from an optional trailing name/id argument,
+ * falling back to the active holiday when none is given. Centralised
+ * here since /holiday tag and /holiday report both need exactly this
+ * fallback, including the same ambiguous-match handling. */
+async function resolveHolidayArgOrActive(
+  ref: string,
+): Promise<{ id: number; name: string } | { error: string }> {
+  if (!ref) {
+    const active = await getActiveHoliday();
+    if (!active) return { error: "No active holiday — name one, e.g. /holiday tag 42 Japan trip." };
+    return { id: active.id, name: active.name };
+  }
+  const resolved = await resolveHolidayRef(ref);
+  if (resolved.kind === "not-found") return { error: `No holiday matches "${ref}". See /holidays.` };
+  if (resolved.kind === "ambiguous") {
+    const list = resolved.matches.map((h) => `#${h.id} ${h.name}`).join(", ");
+    return { error: `Multiple holidays match "${ref}" — specify by id: ${list}` };
+  }
+  return { id: resolved.holiday.id, name: resolved.holiday.name };
+}
+
+bot.command("holiday", async (ctx) => {
+  const raw = ctx.match.trim();
+  const spaceIdx = raw.search(/\s/);
+  const sub = (spaceIdx === -1 ? raw : raw.slice(0, spaceIdx)).toLowerCase();
+  const rest = (spaceIdx === -1 ? "" : raw.slice(spaceIdx + 1)).trim();
+
+  switch (sub) {
+    case "start": {
+      if (!rest) {
+        await ctx.reply("Usage: /holiday start <name>\ne.g. /holiday start Japan trip");
+        return;
+      }
+      const active = await getActiveHoliday();
+      if (active) {
+        await ctx.reply(`🌴 ${active.name} is already active — /holiday end it first.`);
+        return;
+      }
+      const holiday = await startHoliday(rest);
+      const chatId = ctx.chat.id.toString();
+      try {
+        const bannerText = await formatHolidayBannerText(holiday, new Date());
+        const msg = await ctx.reply(bannerText);
+        await ctx.api.pinChatMessage(chatId, msg.message_id, { disable_notification: true });
+        await recordPin(holiday.id, chatId, msg.message_id);
+      } catch (err) {
+        console.error(`could not pin holiday banner for #${holiday.id}`, err);
+        await ctx.reply(
+          `🌴 ${holiday.name} started, but the pinned reminder couldn't be set up — /holiday status still works.`,
+        );
+      }
+      return;
+    }
+
+    case "end": {
+      const ended = await endActiveHoliday();
+      if (!ended) {
+        await ctx.reply("No active holiday.");
+        return;
+      }
+      if (ended.pinnedChatId && ended.pinnedMessageId) {
+        try {
+          const finalText = await formatHolidayBannerText(ended, new Date());
+          await ctx.api.editMessageText(ended.pinnedChatId, ended.pinnedMessageId, finalText);
+          await ctx.api.unpinChatMessage(ended.pinnedChatId, ended.pinnedMessageId);
+        } catch (err) {
+          console.error(`could not finalise/unpin holiday banner for #${ended.id}`, err);
+        }
+      }
+      await ctx.reply(await formatHolidayReport(ended.name, ended.id));
+      return;
+    }
+
+    case "status": {
+      const active = await getActiveHoliday();
+      if (!active) {
+        await ctx.reply("No holiday active.");
+        return;
+      }
+      await ctx.reply(await formatHolidayReport(active.name, active.id));
+      return;
+    }
+
+    case "tag": {
+      const m = rest.match(/^(\d+)\s*(.*)$/s);
+      if (!m) {
+        await ctx.reply("Usage: /holiday tag <transaction id> [holiday name or id]");
+        return;
+      }
+      const [, idStr, nameOrId] = m;
+      const resolved = await resolveHolidayArgOrActive(nameOrId.trim());
+      if ("error" in resolved) {
+        await ctx.reply(resolved.error);
+        return;
+      }
+      const txId = Number(idStr);
+      const updatedId = await tagTransactionHoliday(txId, resolved.id);
+      if (updatedId === null) {
+        await ctx.reply(`Transaction #${txId} not found.`);
+        return;
+      }
+      await refreshHolidayBanner(resolved.id);
+      await ctx.reply(`🌴 #${txId} tagged to ${resolved.name}.`);
+      return;
+    }
+
+    case "untag": {
+      if (!/^\d+$/.test(rest)) {
+        await ctx.reply("Usage: /holiday untag <transaction id>");
+        return;
+      }
+      const txId = Number(rest);
+      const [tx] = await db.select({ holidayId: transactions.holidayId }).from(transactions).where(eq(transactions.id, txId));
+      if (!tx) {
+        await ctx.reply(`Transaction #${txId} not found.`);
+        return;
+      }
+      await tagTransactionHoliday(txId, null);
+      if (tx.holidayId !== null) await refreshHolidayBanner(tx.holidayId);
+      await ctx.reply(`Removed holiday tag from #${txId}.`);
+      return;
+    }
+
+    case "report": {
+      const resolved = await resolveHolidayArgOrActive(rest);
+      if ("error" in resolved) {
+        await ctx.reply(resolved.error);
+        return;
+      }
+      await ctx.reply(await formatHolidayReport(resolved.name, resolved.id));
+      return;
+    }
+
+    default:
+      await ctx.reply(HOLIDAY_USAGE);
+  }
+});
+
+bot.command("holidays", async (ctx) => {
+  const all = await listHolidays();
+  if (all.length === 0) {
+    await ctx.reply("No holidays yet — /holiday start <name> to begin one.");
+    return;
+  }
+  const lines = ["🌴 HOLIDAYS", ""];
+  for (const h of all) {
+    const summary = await computeHolidaySummary(h.id);
+    const status = h.endedAt ? "ended" : "active";
+    lines.push(`#${h.id} ${h.name} (${status}) — ${fmtSgd(summary.total)}`);
+  }
+  await ctx.reply(lines.join("\n"));
 });

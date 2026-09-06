@@ -10,6 +10,7 @@ import { resolveSgdAmount } from "@/lib/fx";
 import { normaliseMerchant } from "@/lib/merchant";
 import { notifyNewTransaction, notifyNotice, notifyParseFailure, notifyUnclassified } from "@/lib/telegram/notify";
 import { isUniqueViolation, secretsMatch } from "@/lib/db-utils";
+import { getActiveHolidayId, refreshHolidayBanner } from "@/lib/holidays";
 
 export const runtime = "nodejs";
 
@@ -139,6 +140,12 @@ export async function POST(req: Request): Promise<Response> {
   // FR-2/FR-22: spot-convert anything not already in SGD.
   const { sgdAmountCents, fxSource, fxRate } = await resolveSgdAmount(transaction.currency, transaction.amountCents);
 
+  // Holiday mode: arrival semantics — anything ingested while a holiday
+  // is active gets tagged to it, same as every other parser field here.
+  // A pre-trip booking or a mis-swept charge is fixed after the fact via
+  // /holiday tag or /holiday untag, not by backdating this check.
+  const activeHolidayId = await getActiveHolidayId();
+
   let newTxId: number;
   try {
     const [row] = await db
@@ -157,6 +164,7 @@ export async function POST(req: Request): Promise<Response> {
         accountIdentifier: transaction.accountIdentifier,
         occurredAt: transaction.occurredAt,
         rawEmail: email.htmlBody || email.textBody,
+        holidayId: activeHolidayId,
       })
       .returning({ id: transactions.id });
     newTxId = row.id;
@@ -164,6 +172,10 @@ export async function POST(req: Request): Promise<Response> {
     if (isUniqueViolation(err)) return Response.json({ status: "duplicate" });
     throw err;
   }
+
+  // refreshHolidayBanner is itself best-effort (see lib/holidays.ts) —
+  // it never throws, so no try/catch is needed at this call site.
+  if (activeHolidayId !== null) await refreshHolidayBanner(activeHolidayId);
 
   // Same reasoning as the triage notification above: the transaction row
   // exists now, so throwing here would strand it — Apps Script retries,

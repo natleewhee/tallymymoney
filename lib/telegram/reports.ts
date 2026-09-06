@@ -5,7 +5,7 @@
 
 import { and, eq, gte, lt, sql } from "drizzle-orm";
 import { db } from "../db";
-import { transactions, unclassifiedEmails } from "../schema";
+import { holidays, transactions, unclassifiedEmails, type Transaction } from "../schema";
 import { formatSgtDateTime } from "../sgt";
 
 export function fmtSgd(cents: number): string {
@@ -62,29 +62,12 @@ export interface TransactionLine {
   signedAmountCents: number;
 }
 
-/** Shared aggregation behind every report and behind /partner's
- * settle-up figure, so "this month's joint total" always means the same
- * thing wherever it's computed. */
-export async function computeRangeSummary(start: Date, end: Date): Promise<RangeSummary> {
-  const rows = await db
-    .select()
-    .from(transactions)
-    .where(
-      and(
-        gte(transactions.occurredAt, start),
-        lt(transactions.occurredAt, end),
-        // Exclude rows that only exist to reduce another transaction —
-        // they're folded into the parent's net total, not counted twice.
-        sql`${transactions.reducesTransactionId} IS NULL`,
-      ),
-    );
-
-  const [{ count: pendingParserCount }] = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(unclassifiedEmails)
-    .where(eq(unclassifiedEmails.status, "needs_parser"));
-
-  // Net each row against anything that reduces it.
+/** Net-each-row-against-anything-that-reduces-it, shared by every scope
+ * (date range or a single holiday) — unscoped by design (FR-21/
+ * ARCHITECTURE.md): a reversal can land in a different period from the
+ * purchase it reverses, so netting has to see every reduction regardless
+ * of which report is asking. */
+async function fetchReductionByTarget(): Promise<Map<number, number>> {
   const reductions = await db
     .select({
       target: transactions.reducesTransactionId,
@@ -97,7 +80,18 @@ export async function computeRangeSummary(start: Date, end: Date): Promise<Range
     if (r.target === null) continue;
     reductionByTarget.set(r.target, (reductionByTarget.get(r.target) ?? 0) + r.amount);
   }
+  return reductionByTarget;
+}
 
+/** The aggregation loop shared by computeRangeSummary and
+ * computeHolidaySummary — both scopes differ only in which rows they
+ * select and whether pendingParserCount means anything, not in how a
+ * selected row is folded into the totals. */
+function summarizeRows(
+  rows: Transaction[],
+  reductionByTarget: Map<number, number>,
+  pendingParserCount: number,
+): RangeSummary {
   let total = 0;
   let moneyIn = 0;
   let solo = 0;
@@ -179,9 +173,99 @@ export async function computeRangeSummary(start: Date, end: Date): Promise<Range
   };
 }
 
+/** Shared aggregation behind every date-scoped report and behind
+ * /partner's settle-up figure, so "this month's joint total" always
+ * means the same thing wherever it's computed. */
+export async function computeRangeSummary(start: Date, end: Date): Promise<RangeSummary> {
+  const rows = await db
+    .select()
+    .from(transactions)
+    .where(
+      and(
+        gte(transactions.occurredAt, start),
+        lt(transactions.occurredAt, end),
+        // Exclude rows that only exist to reduce another transaction —
+        // they're folded into the parent's net total, not counted twice.
+        sql`${transactions.reducesTransactionId} IS NULL`,
+        // Holiday mode: a trip's spend gets its own total via
+        // computeHolidaySummary and is excluded from ordinary
+        // date-scoped reports so a trip doesn't distort a category's
+        // monthly average. computeHolidayExclusionSummary surfaces what
+        // was excluded so the gap isn't silent.
+        sql`${transactions.holidayId} IS NULL`,
+      ),
+    );
+
+  const [{ count: pendingParserCount }] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(unclassifiedEmails)
+    .where(eq(unclassifiedEmails.status, "needs_parser"));
+
+  return summarizeRows(rows, await fetchReductionByTarget(), pendingParserCount);
+}
+
+/** A single holiday's total, independent of date — a trip can span a
+ * month boundary and still needs one number. pendingParserCount isn't
+ * meaningful per-holiday (it's a global backlog count), so it's always 0
+ * here; RangeSummary keeps one shared shape rather than a near-duplicate
+ * type for this one field. */
+export async function computeHolidaySummary(holidayId: number): Promise<RangeSummary> {
+  const rows = await db
+    .select()
+    .from(transactions)
+    .where(and(eq(transactions.holidayId, holidayId), sql`${transactions.reducesTransactionId} IS NULL`));
+
+  return summarizeRows(rows, await fetchReductionByTarget(), 0);
+}
+
+export interface HolidayExclusion {
+  name: string;
+  total: number;
+}
+
+/** What computeRangeSummary's date-scoped reports leave out because it
+ * belongs to a holiday instead — the "heads up, this isn't silently
+ * missing" line for /today, /week, /month, and the monthly markdown
+ * export. Approximate rather than fully netted (doesn't exclude
+ * placeholder rows or net cross-period reversals the way
+ * computeHolidaySummary does): good enough for a one-line notice, not a
+ * substitute for /holiday report's precise total. */
+export async function computeHolidayExclusionSummary(start: Date, end: Date): Promise<HolidayExclusion[]> {
+  const rows = await db
+    .select({
+      name: holidays.name,
+      amount: transactions.sgdAmountCents,
+      direction: transactions.direction,
+    })
+    .from(transactions)
+    .innerJoin(holidays, eq(holidays.id, transactions.holidayId))
+    .where(
+      and(
+        gte(transactions.occurredAt, start),
+        lt(transactions.occurredAt, end),
+        sql`${transactions.reducesTransactionId} IS NULL`,
+        sql`${transactions.status} != 'ignored'`,
+      ),
+    );
+
+  const totals = new Map<string, number>();
+  for (const r of rows) {
+    const signed = r.direction === "debit" ? r.amount : -r.amount;
+    totals.set(r.name, (totals.get(r.name) ?? 0) + signed);
+  }
+  return [...totals.entries()].map(([name, total]) => ({ name, total }));
+}
+
 export interface ComparisonPeriod {
   label: string;
   total: number;
+}
+
+/** One line per holiday excluded from a date-scoped report's totals —
+ * shared by formatRangeReport and formatMonthlyMarkdown so the notice
+ * reads the same in both places. */
+function holidayExclusionLines(exclusions: HolidayExclusion[]): string[] {
+  return exclusions.map((h) => `🌴 ${fmtSgd(h.total)} — ${h.name} (excluded above, see /holiday report)`);
 }
 
 export async function formatRangeReport(
@@ -191,10 +275,12 @@ export async function formatRangeReport(
   comparison?: ComparisonPeriod,
 ): Promise<string> {
   const s = await computeRangeSummary(start, end);
+  const holidayExclusions = await computeHolidayExclusionSummary(start, end);
 
   if (s.txCount === 0) {
     const lines = [`📊 ${title.toUpperCase()}`, "", "No transactions."];
     if (comparison) lines.push(`📈 vs ${comparison.label}: ${fmtSgd(s.total)} vs ${fmtSgd(comparison.total)}`);
+    lines.push(...holidayExclusionLines(holidayExclusions));
     if (s.placeholderCount > 0) {
       lines.push(`🚫 ${s.placeholderCount} excluded — no FX rate available (≈${fmtSgd(s.placeholderExcludedTotal)} not counted) — see /estimates`);
     }
@@ -225,6 +311,7 @@ export async function formatRangeReport(
   lines.push("", `📈 ${s.txCount} transaction(s)`);
   if (s.untaggedCount > 0) lines.push(`⚠️ ${s.untaggedCount} untagged`);
   if (s.fxEstimatedCount > 0) lines.push(`⚠️ ${s.fxEstimatedCount} carrying an unconfirmed FX estimate — see /estimates`);
+  lines.push(...holidayExclusionLines(holidayExclusions));
   if (s.placeholderCount > 0) {
     lines.push(`🚫 ${s.placeholderCount} excluded — no FX rate available (≈${fmtSgd(s.placeholderExcludedTotal)} not counted) — see /estimates`);
   }
@@ -257,6 +344,7 @@ export async function formatMonthlyMarkdown(
   comparison?: ComparisonPeriod,
 ): Promise<string> {
   const s = await computeRangeSummary(start, end);
+  const holidayExclusions = await computeHolidayExclusionSummary(start, end);
   const out: string[] = [`# 📊 ${title}`, ""];
 
   out.push("## Summary", "");
@@ -269,6 +357,14 @@ export async function formatMonthlyMarkdown(
   if (s.moneyIn > 0) out.push(`- **Money in:** ${fmtSgd(s.moneyIn)} (already netted into total)`);
   if (s.solo || s.joint) out.push(`- **Solo:** ${fmtSgd(s.solo)}  ·  **Joint:** ${fmtSgd(s.joint)}`);
   out.push(`- **Transactions:** ${s.txCount}`, "");
+
+  if (holidayExclusions.length > 0) {
+    out.push("## Excluded (Holiday Mode)", "");
+    for (const h of holidayExclusions) {
+      out.push(`- **${escCell(h.name)}:** ${fmtSgd(h.total)} — excluded from the totals above, see \`/holiday report\``);
+    }
+    out.push("");
+  }
 
   if (s.byCategory.size > 0 || s.uncategorizedTotal !== 0) {
     out.push("## By Category", "", "| Category | Amount |", "|---|---|");
@@ -306,6 +402,41 @@ export async function formatMonthlyMarkdown(
   }
 
   return out.join("\n");
+}
+
+/** /holiday report and the pinned banner's final summary text share this
+ * — a holiday's total plus its own category breakdown, the thing
+ * Option B (holiday as a tag alongside category, not a replacement)
+ * exists to preserve. No date range, no comparison: a trip's identity is
+ * the holiday, not a calendar period. */
+export async function formatHolidayReport(name: string, holidayId: number): Promise<string> {
+  const s = await computeHolidaySummary(holidayId);
+
+  if (s.txCount === 0) {
+    return [`🌴 ${name.toUpperCase()}`, "", "No transactions yet."].join("\n");
+  }
+
+  const lines: string[] = [`🌴 ${name.toUpperCase()}`, "", `💳 Total: ${fmtSgd(s.total)}`];
+  if (s.moneyIn > 0) lines.push(`💰 Money in: ${fmtSgd(s.moneyIn)} (already netted into total)`);
+  if (s.solo || s.joint) {
+    lines.push(`👤 Solo: ${fmtSgd(s.solo)}  ·  👥 Joint: ${fmtSgd(s.joint)}`);
+  }
+  if (s.byCategory.size > 0 || s.uncategorizedTotal !== 0) {
+    lines.push("", "BY CATEGORY");
+    for (const [cat, amt] of [...s.byCategory.entries()].sort((a, b) => b[1] - a[1])) {
+      lines.push(`${cat}: ${fmtSgd(amt)}`);
+    }
+    if (s.uncategorizedTotal !== 0) lines.push(`Uncategorised: ${fmtSgd(s.uncategorizedTotal)}`);
+  }
+
+  lines.push("", `📈 ${s.txCount} transaction(s)`);
+  if (s.untaggedCount > 0) lines.push(`⚠️ ${s.untaggedCount} untagged`);
+  if (s.fxEstimatedCount > 0) lines.push(`⚠️ ${s.fxEstimatedCount} carrying an unconfirmed FX estimate — see /estimates`);
+  if (s.placeholderCount > 0) {
+    lines.push(`🚫 ${s.placeholderCount} excluded — no FX rate available (≈${fmtSgd(s.placeholderExcludedTotal)} not counted) — see /estimates`);
+  }
+
+  return lines.join("\n");
 }
 
 export async function formatPendingReport(): Promise<string> {
