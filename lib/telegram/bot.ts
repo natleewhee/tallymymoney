@@ -15,6 +15,7 @@ import {
   splitKeyboard,
 } from "./keyboards";
 import {
+  computeHolidaySummaries,
   computeHolidaySummary,
   computeRangeSummary,
   fmtSgd,
@@ -35,6 +36,7 @@ import { resendUnnotified, retryUnparsed } from "../recovery";
 import { notifyFxPending, notifyNewTransaction } from "./notify";
 import { queueLabelRemoval } from "../gmail-labels";
 import {
+  clearPinIfMessageGone,
   endActiveHoliday,
   formatHolidayBannerText,
   getActiveHoliday,
@@ -945,6 +947,15 @@ bot.command("holiday", async (ctx) => {
         return;
       }
       const holiday = await startHoliday(rest);
+      if (!holiday) {
+        // idx_holidays_one_active (schema.ts) rejected this — a holiday
+        // became active between the getActiveHoliday() check above and
+        // this insert (a retried webhook delivery, or two taps close
+        // together). Same user-facing message as the ordinary check.
+        const active = await getActiveHoliday();
+        await ctx.reply(`🌴 ${active?.name ?? "Another holiday"} is already active — /holiday end it first.`);
+        return;
+      }
       const chatId = ctx.chat.id.toString();
       try {
         const bannerText = await formatHolidayBannerText(holiday, new Date());
@@ -966,16 +977,22 @@ bot.command("holiday", async (ctx) => {
         await ctx.reply("No active holiday.");
         return;
       }
+      // Computed once and passed into both formatHolidayBannerText and
+      // formatHolidayReport below — each used to call computeHolidaySummary
+      // itself, so ending a holiday ran the same query twice.
+      const summary = await computeHolidaySummary(ended.id);
       if (ended.pinnedChatId && ended.pinnedMessageId) {
         try {
-          const finalText = await formatHolidayBannerText(ended, new Date());
+          const finalText = await formatHolidayBannerText(ended, new Date(), summary);
           await ctx.api.editMessageText(ended.pinnedChatId, ended.pinnedMessageId, finalText);
           await ctx.api.unpinChatMessage(ended.pinnedChatId, ended.pinnedMessageId);
         } catch (err) {
-          console.error(`could not finalise/unpin holiday banner for #${ended.id}`, err);
+          if (!(await clearPinIfMessageGone(ended.id, err))) {
+            console.error(`could not finalise/unpin holiday banner for #${ended.id}`, err);
+          }
         }
       }
-      await ctx.reply(await formatHolidayReport(ended.name, ended.id));
+      await ctx.reply(await formatHolidayReport(ended.name, ended.id, summary));
       return;
     }
 
@@ -985,7 +1002,9 @@ bot.command("holiday", async (ctx) => {
         await ctx.reply("No holiday active.");
         return;
       }
-      await ctx.reply(await formatHolidayReport(active.name, active.id));
+      const report = await formatHolidayReport(active.name, active.id);
+      const pinNote = active.pinnedChatId && active.pinnedMessageId ? "" : "\n\n⚠️ No pinned reminder for this holiday — it may have been deleted from the chat.";
+      await ctx.reply(report + pinNote);
       return;
     }
 
@@ -1050,11 +1069,14 @@ bot.command("holidays", async (ctx) => {
     await ctx.reply("No holidays yet — /holiday start <name> to begin one.");
     return;
   }
+  // One batched query for every holiday's transactions plus one shared
+  // reduction fetch, not one of each per holiday — a list of N holidays
+  // no longer costs N+1 round trips.
+  const summaries = await computeHolidaySummaries(all.map((h) => h.id));
   const lines = ["🌴 HOLIDAYS", ""];
   for (const h of all) {
-    const summary = await computeHolidaySummary(h.id);
     const status = h.endedAt ? "ended" : "active";
-    lines.push(`#${h.id} ${h.name} (${status}) — ${fmtSgd(summary.total)}`);
+    lines.push(`#${h.id} ${h.name} (${status}) — ${fmtSgd(summaries.get(h.id)!.total)}`);
   }
   await ctx.reply(lines.join("\n"));
 });

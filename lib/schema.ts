@@ -16,6 +16,7 @@ import {
   text,
   timestamp,
   type AnyPgColumn,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 // Holiday mode: while a holiday is active, every transaction that
@@ -32,10 +33,12 @@ export const holidays = pgTable(
     id: serial("id").primaryKey(),
     name: text("name").notNull(),
     startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
-    // Null while the holiday is active. App-level (not DB-level) guard
-    // against more than one active holiday at a time — single-user bot,
-    // no concurrent writers, so a check-then-insert in lib/holidays.ts is
-    // sufficient without a partial-unique-index race to defend against.
+    // Null while the holiday is active. lib/holidays.ts's startHoliday()
+    // still check-then-inserts (the ordinary path never hits the DB
+    // guard), but a Telegram webhook retry or two people tapping
+    // /holiday start within the same request window is a real, if rare,
+    // race — idx_holidays_one_active below is the actual enforcement,
+    // not the check in application code.
     endedAt: timestamp("ended_at", { withTimezone: true }),
     // The pinned "still on holiday" banner message, so it can be edited
     // in place as spend comes in and unpinned on /holiday end. Null until
@@ -45,7 +48,14 @@ export const holidays = pgTable(
     pinnedMessageId: bigint("pinned_message_id", { mode: "number" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [index("idx_holidays_active").on(table.id).where(sql`${table.endedAt} IS NULL`)],
+  (table) => [
+    index("idx_holidays_active").on(table.id).where(sql`${table.endedAt} IS NULL`),
+    // A unique index on a constant expression, restricted to active rows,
+    // means Postgres itself rejects a second concurrent INSERT that would
+    // leave two rows with ended_at IS NULL — the actual race guard; see
+    // endedAt's comment above.
+    uniqueIndex("idx_holidays_one_active").on(sql`(true)`).where(sql`${table.endedAt} IS NULL`),
+  ],
 );
 
 export const transactions = pgTable(
