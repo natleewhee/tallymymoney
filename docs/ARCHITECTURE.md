@@ -138,8 +138,8 @@ CREATE TABLE holidays (
   id                SERIAL PRIMARY KEY,
   name              TEXT NOT NULL,
   started_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  ended_at          TIMESTAMPTZ,             -- NULL while active; app-level (not DB-level)
-                                              -- guard against more than one active at a time
+  ended_at          TIMESTAMPTZ,             -- NULL while active; idx_holidays_one_active
+                                              -- below enforces at most one such row at a time
   pinned_chat_id    TEXT,                    -- the pinned "still on holiday" reminder
   pinned_message_id BIGINT,                  -- message, edited in place as spend comes in
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -187,6 +187,11 @@ CREATE INDEX idx_tx_fx_estimate ON transactions (id) WHERE fx_source = 'spot_est
 CREATE INDEX idx_tx_holiday     ON transactions (holiday_id) WHERE holiday_id IS NOT NULL;
 CREATE INDEX idx_unclassified   ON unclassified_emails (status) WHERE status != 'ignored';
 CREATE INDEX idx_holidays_active ON holidays (id) WHERE ended_at IS NULL;
+-- Unique index on a constant expression, restricted to active rows: Postgres
+-- rejects a second concurrent INSERT that would leave two rows with
+-- ended_at IS NULL — a real (if rare) race between a retried Telegram
+-- webhook delivery and an app-level check-then-insert, not just theoretical.
+CREATE UNIQUE INDEX idx_holidays_one_active ON holidays ((true)) WHERE ended_at IS NULL;
 ```
 
 Deliberate departures from the dump:

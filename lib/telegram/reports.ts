@@ -3,7 +3,7 @@
 // unconfirmed FX estimates — per FR-15. A report that hides its own gaps
 // is worse than no report; see STRATEGY.md §5 design principle.
 
-import { and, eq, gte, lt, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { db } from "../db";
 import { holidays, transactions, unclassifiedEmails, type Transaction } from "../schema";
 import { formatSgtDateTime } from "../sgt";
@@ -204,18 +204,45 @@ export async function computeRangeSummary(start: Date, end: Date): Promise<Range
   return summarizeRows(rows, await fetchReductionByTarget(), pendingParserCount);
 }
 
+/** Batched form of computeHolidaySummary — one query for every holiday's
+ * transactions plus one shared fetchReductionByTarget(), instead of
+ * paying for both per holiday. computeHolidaySummary below is a
+ * single-id convenience wrapper around this; /holidays (which lists
+ * every holiday) is why the batched form exists at all. */
+export async function computeHolidaySummaries(holidayIds: number[]): Promise<Map<number, RangeSummary>> {
+  if (holidayIds.length === 0) return new Map();
+
+  const rows = await db
+    .select()
+    .from(transactions)
+    .where(and(inArray(transactions.holidayId, holidayIds), sql`${transactions.reducesTransactionId} IS NULL`));
+
+  const rowsByHoliday = new Map<number, Transaction[]>();
+  for (const row of rows) {
+    if (row.holidayId === null) continue;
+    const group = rowsByHoliday.get(row.holidayId);
+    if (group) group.push(row);
+    else rowsByHoliday.set(row.holidayId, [row]);
+  }
+
+  const reductionByTarget = await fetchReductionByTarget();
+  const result = new Map<number, RangeSummary>();
+  for (const id of holidayIds) {
+    result.set(id, summarizeRows(rowsByHoliday.get(id) ?? [], reductionByTarget, 0));
+  }
+  return result;
+}
+
 /** A single holiday's total, independent of date — a trip can span a
  * month boundary and still needs one number. pendingParserCount isn't
  * meaningful per-holiday (it's a global backlog count), so it's always 0
  * here; RangeSummary keeps one shared shape rather than a near-duplicate
  * type for this one field. */
 export async function computeHolidaySummary(holidayId: number): Promise<RangeSummary> {
-  const rows = await db
-    .select()
-    .from(transactions)
-    .where(and(eq(transactions.holidayId, holidayId), sql`${transactions.reducesTransactionId} IS NULL`));
-
-  return summarizeRows(rows, await fetchReductionByTarget(), 0);
+  const summaries = await computeHolidaySummaries([holidayId]);
+  // computeHolidaySummaries always sets every requested id, even to an
+  // all-zero summary when the holiday has no transactions yet.
+  return summaries.get(holidayId)!;
 }
 
 export interface HolidayExclusion {
@@ -226,34 +253,46 @@ export interface HolidayExclusion {
 /** What computeRangeSummary's date-scoped reports leave out because it
  * belongs to a holiday instead — the "heads up, this isn't silently
  * missing" line for /today, /week, /month, and the monthly markdown
- * export. Approximate rather than fully netted (doesn't exclude
- * placeholder rows or net cross-period reversals the way
- * computeHolidaySummary does): good enough for a one-line notice, not a
- * substitute for /holiday report's precise total. */
+ * export. Scoped to [start, end) like the report it annotates (unlike
+ * computeHolidaySummary/computeHolidaySummaries, which total a whole
+ * holiday regardless of date) but now routed through summarizeRows so it
+ * nets reductions and excludes placeholder-FX rows exactly like
+ * /holiday report does — this used to sum sgdAmountCents directly and
+ * could overstate a holiday's excluded total by any reversed or
+ * unconfirmed-FX amount within the period. */
 export async function computeHolidayExclusionSummary(start: Date, end: Date): Promise<HolidayExclusion[]> {
   const rows = await db
-    .select({
-      name: holidays.name,
-      amount: transactions.sgdAmountCents,
-      direction: transactions.direction,
-    })
+    .select()
     .from(transactions)
-    .innerJoin(holidays, eq(holidays.id, transactions.holidayId))
     .where(
       and(
         gte(transactions.occurredAt, start),
         lt(transactions.occurredAt, end),
+        sql`${transactions.holidayId} IS NOT NULL`,
         sql`${transactions.reducesTransactionId} IS NULL`,
-        sql`${transactions.status} != 'ignored'`,
       ),
     );
+  if (rows.length === 0) return [];
 
-  const totals = new Map<string, number>();
-  for (const r of rows) {
-    const signed = r.direction === "debit" ? r.amount : -r.amount;
-    totals.set(r.name, (totals.get(r.name) ?? 0) + signed);
+  const holidayIds = [...new Set(rows.map((r) => r.holidayId!))];
+  const names = await db.select({ id: holidays.id, name: holidays.name }).from(holidays).where(inArray(holidays.id, holidayIds));
+  const nameById = new Map(names.map((n) => [n.id, n.name]));
+
+  const rowsByHoliday = new Map<number, Transaction[]>();
+  for (const row of rows) {
+    const id = row.holidayId!;
+    const group = rowsByHoliday.get(id);
+    if (group) group.push(row);
+    else rowsByHoliday.set(id, [row]);
   }
-  return [...totals.entries()].map(([name, total]) => ({ name, total }));
+
+  const reductionByTarget = await fetchReductionByTarget();
+  const out: HolidayExclusion[] = [];
+  for (const [id, group] of rowsByHoliday) {
+    const summary = summarizeRows(group, reductionByTarget, 0);
+    if (summary.total !== 0) out.push({ name: nameById.get(id) ?? `#${id}`, total: summary.total });
+  }
+  return out;
 }
 
 export interface ComparisonPeriod {
@@ -409,8 +448,8 @@ export async function formatMonthlyMarkdown(
  * Option B (holiday as a tag alongside category, not a replacement)
  * exists to preserve. No date range, no comparison: a trip's identity is
  * the holiday, not a calendar period. */
-export async function formatHolidayReport(name: string, holidayId: number): Promise<string> {
-  const s = await computeHolidaySummary(holidayId);
+export async function formatHolidayReport(name: string, holidayId: number, precomputed?: RangeSummary): Promise<string> {
+  const s = precomputed ?? (await computeHolidaySummary(holidayId));
 
   if (s.txCount === 0) {
     return [`🌴 ${name.toUpperCase()}`, "", "No transactions yet."].join("\n");

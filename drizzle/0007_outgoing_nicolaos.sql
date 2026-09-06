@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_holidays_one_active" ON "holidays" USING btree ((true)) WHERE "holidays"."ended_at" IS NULL;
