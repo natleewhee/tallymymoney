@@ -132,3 +132,18 @@ test("10: Trust overseas spend (CNY, distinct word order from domestic)", () => 
   assert.equal(transaction.accountIdentifier, "Freedom");
   assert.equal(transaction.occurredAt.toISOString(), "2026-08-19T02:01:00.000Z");
 });
+
+test("11: UOB card spend, foreign currency (CNY) — real sample caught a bug where SGD was hardcoded", () => {
+  const receivedAt = new Date(Date.UTC(2026, 8, 5, 8, 29)); // 16:29 SGT
+  const email = loadSample("11-uob-card-fx-spend.txt", receivedAt);
+  const { bank, transaction } = dispatch(email);
+  assert.equal(bank, "UOB");
+  assert.ok(transaction);
+  assert.equal(transaction.direction, "debit");
+  assert.equal(transaction.currency, "CNY");
+  assert.equal(transaction.amountCents, 213800);
+  assert.equal(transaction.merchantRaw, "echnology Company Limited");
+  assert.equal(transaction.accountIdentifier, "9515");
+  // No time in body; hour/minute borrow from receivedAt, same as test 02.
+  assert.equal(transaction.occurredAt.getTime(), receivedAt.getTime());
+});

@@ -1,0 +1,42 @@
+From: unialerts@uobgroup.com
+Subject: UOB - Transaction Alert
+Format: plain text
+Captured: 2026-09-06 (transaction occurred 2026-09-05)
+
+---
+
+A transaction of CNY 2,138.00 was made with your UOB Card ending 9515 on
+05/09/26 at echnology Company Limited. If unauthorised, call 24/7 Fraud
+Hotline now
+UOB EMAIL DISCLAIMER: Any person receiving this email and any attachment(s)
+contained, shall treat the information as confidential and not misuse,
+copy, disclose, distribute or retain the information in any way that
+amounts to a breach of confidentiality. If you are not the intended
+recipient, please delete all copies of this email from your computer
+system. As the integrity of this message cannot be guaranteed, neither UOB
+nor any entity in the UOB Group shall be responsible for the contents. Any
+opinion in this email may not necessarily represent the opinion of UOB or
+any entity in the UOB Group.
+
+---
+
+Extracted:
+  direction: debit
+  amount: CNY 2,138.00 — foreign currency, spot-converted per FR-2/FR-22
+  account_last4: 9515
+  occurred_at: 2026-09-05 (no time in body — date only, same as 02-uob-card-spend.txt)
+  merchant: "echnology Company Limited" — UOB's own merchant-descriptor
+    truncation (the leading characters, presumably "... Technology
+    Company Limited", are simply absent from the source email — not a
+    parser bug, the raw alert genuinely starts mid-word)
+
+Note: same "A transaction of {amount} was made with your UOB Card ending
+{last4} on {date} at {merchant}" template as 02-uob-card-spend.txt, but
+with a non-SGD currency (CNY here). Real sample confirmed 2026-09-05:
+the parser's original regex hardcoded a literal "SGD" in the amount
+capture, so this exact template with a foreign currency never matched at
+all and silently fell through to unclassified-email triage instead of
+being recorded — same class of bug as the Trust apostrophe/line-wrap
+issues in docs/solutions/logic-errors/trust-parser-untested-regex-bugs.md.
+Fixed by capturing the currency generically, same approach already used
+by parseCardReversal in the same file.

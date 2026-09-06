@@ -21,14 +21,20 @@ function parseCardSpend(text: string, receivedAt: Date): ParsedTransaction | nul
   // real Singapore company names routinely embed one (e.g. "CRAVE FOODS
   // PTE. LTD.", confirmed 2026-08-19), and the old exclusion silently
   // failed to match the whole email whenever one showed up.
+  //
+  // Currency is captured rather than pinned to SGD — confirmed real
+  // sample: a foreign-currency card charge ("A transaction of CNY
+  // 2,138.00 was made...") uses this exact template, just with a
+  // non-SGD currency. FX conversion happens downstream in /api/ingest
+  // (FR-2), same as every other foreign-currency parser here.
   const m = text.match(
-    /A transaction of\s+(SGD\s*[\d,]+\.\d+)\s+was made with your UOB Card ending\s+([A-Za-z0-9]+)\s+on\s+(\d{2}\/\d{2}\/\d{2})\s+at\s+(.+?)\.?\s*(?:If unauthorised|$)/i,
+    /A transaction of\s+([A-Z]{3})\s*([\d,]+\.\d+)\s+was made with your UOB Card ending\s+([A-Za-z0-9]+)\s+on\s+(\d{2}\/\d{2}\/\d{2})\s+at\s+(.+?)\.?\s*(?:If unauthorised|$)/i,
   );
   if (!m) return null;
-  const [, amountStr, last4, dateStr, merchant] = m;
+  const [, currency, amountStr, last4, dateStr, merchant] = m;
   return {
-    amountCents: parseAmount(amountStr),
-    currency: "SGD",
+    amountCents: Math.round(parseFloat(amountStr.replace(/,/g, "")) * 100),
+    currency: currency.toUpperCase(),
     direction: "debit",
     merchantRaw: cleanMerchant(merchant),
     bank: "UOB",
