@@ -1,0 +1,44 @@
+From: unialerts@uobgroup.com
+Subject: UOB Transaction Alert
+Format: plain text
+Captured: 2026-09-08 (transaction occurred 2026-09-07)
+
+---
+
+A transaction of SGD552.06 was debited from your a/c XXXXXX6835 at
+06:54PM 7-Sep-2026, SGT. Ref: Inward DR - GIRO, IRAS, TAXS S9200902E,
+Income Tax. If unauthorised, call UOB Customer Service.
+UOB EMAIL DISCLAIMER: Any person receiving this email and any attachment(s)
+contained, shall treat the information as confidential and not misuse,
+copy, disclose, distribute or retain the information in any way that
+amounts to a breach of confidentiality. If you are not the intended
+recipient, please delete all copies of this email from your computer
+system. As the integrity of this message cannot be guaranteed, neither UOB
+nor any entity in the UOB Group shall be responsible for the contents. Any
+opinion in this email may not necessarily represent the opinion of UOB or
+any entity in the UOB Group.
+
+---
+
+Extracted:
+  direction: debit
+  amount: SGD 552.06
+  account_last4: 6835 (from "a/c XXXXXX6835")
+  occurred_at: 2026-09-07 18:54 SGT
+  merchant: none — a GIRO/direct-debit alert on the bank account itself,
+            not a card transaction. The "Ref:" field is IRAS's own
+            reference for this payment ("Inward DR - GIRO, IRAS, TAXS
+            S9200902E, Income Tax"), stored as merchantRaw verbatim.
+
+Note: a fourth distinct UOB template ("A transaction of {amount} was
+debited from your a/c {acct} at {time} {date}, SGT. Ref: {ref}."),
+subject "UOB Transaction Alert" (no dash, differs from the card
+templates' "UOB - Transaction Alert" and "UOB Transaction Alert" seen
+elsewhere — (sender, subject) alone still isn't a reliable enough
+fingerprint to skip body parsing, confirming the same lesson from
+07-dbs-paynow-received.txt). Also a different date/time format from
+every other UOB parser here (see parseUobGiroDate in dates.ts): time
+and date are separate tokens ("06:54PM" / "7-Sep-2026"), day-Mon-year
+with single dashes. Only the "debited" direction is confirmed; a
+symmetric "credited" GIRO alert isn't handled since no such sample has
+been seen yet.

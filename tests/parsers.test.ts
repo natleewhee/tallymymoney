@@ -147,3 +147,16 @@ test("11: UOB card spend, foreign currency (CNY) — real sample caught a bug wh
   // No time in body; hour/minute borrow from receivedAt, same as test 02.
   assert.equal(transaction.occurredAt.getTime(), receivedAt.getTime());
 });
+
+test("12: UOB GIRO/bank-account debit (a fourth UOB template — line-wrapped Ref field)", () => {
+  const email = loadSample("12-uob-giro-debit.txt", new Date(Date.UTC(2026, 8, 8)));
+  const { bank, transaction } = dispatch(email);
+  assert.equal(bank, "UOB");
+  assert.ok(transaction);
+  assert.equal(transaction.direction, "debit");
+  assert.equal(transaction.currency, "SGD");
+  assert.equal(transaction.amountCents, 55206);
+  assert.equal(transaction.merchantRaw, "Inward DR - GIRO, IRAS, TAXS S9200902E, Income Tax");
+  assert.equal(transaction.accountIdentifier, "6835");
+  assert.equal(transaction.occurredAt.toISOString(), "2026-09-07T10:54:00.000Z");
+});

@@ -142,6 +142,23 @@ export function parseTrustDate(s: string): Date {
   return sgtToUtc(Number(yearStr), month0, Number(dayStr), Number(hourStr), Number(minuteStr));
 }
 
+/** UOB bank-account GIRO/direct-debit shape: separate "06:54PM" and
+ * "7-Sep-2026" tokens (day-Mon-year, single dashes) — distinct from
+ * every other UOB date format in this file (all card-alert shapes). */
+export function parseUobGiroDate(timeStr: string, dateStr: string): Date {
+  const dm = dateStr.trim().match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
+  const tm = timeStr.trim().match(/^(\d{1,2}):(\d{2})(AM|PM)$/i);
+  if (!dm) throw new Error(`Unrecognised UOB GIRO date format: "${dateStr}"`);
+  if (!tm) throw new Error(`Unrecognised UOB GIRO time format: "${timeStr}"`);
+  const [, dayStr, monthStr, yearStr] = dm;
+  const month0 = MONTHS[monthStr.toLowerCase()];
+  if (month0 === undefined) throw new Error(`Unrecognised month in UOB GIRO date: "${dateStr}"`);
+  const [, hourStr, minuteStr, ampm] = tm;
+  let hour = Number(hourStr) % 12;
+  if (ampm.toUpperCase() === "PM") hour += 12;
+  return sgtToUtc(Number(yearStr), month0, Number(dayStr), hour, Number(minuteStr));
+}
+
 /** Citibank: separate "20/04/26" (DD/MM/YY) and "05:38:23" fields.
  * Timezone is ASSUMED SGT — never stated in the sample. */
 export function parseCitiDate(dateStr: string, timeStr: string): Date {
