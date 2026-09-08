@@ -6,7 +6,7 @@
 import type { BankParser, InboundEmail, ParsedTransaction } from "./types";
 import { bestText, cleanMerchant } from "./types";
 import { stripHtml } from "./html";
-import { parseUobLongDate, parseUobRefundDate, parseUobReversalDate, parseUobShortDate } from "./dates";
+import { parseUobGiroDate, parseUobLongDate, parseUobRefundDate, parseUobReversalDate, parseUobShortDate } from "./dates";
 
 function parseAmount(s: string): number {
   const m = s.match(/SGD\s*([\d,]+\.\d+)/i);
@@ -114,6 +114,38 @@ function parseRefund(text: string, receivedAt: Date): ParsedTransaction | null {
   };
 }
 
+/** "A transaction of SGD552.06 was debited from your a/c XXXXXX6835 at
+ * 06:54PM 7-Sep-2026, SGT. Ref: Inward DR - GIRO, IRAS, TAXS S9200902E,
+ * Income Tax." A bank-account GIRO/direct-debit alert — distinct from
+ * every other template here, which are all card alerts. UOB also alerts
+ * on the linked deposit account itself, not just the card. The "Ref:"
+ * field carries whatever description the counterparty's own reference
+ * supplies (here, IRAS's reference for an income tax payment) and
+ * becomes merchantRaw as-is — there's no separate merchant-name field to
+ * extract it from. Only "debited" is confirmed by a real sample; a
+ * symmetric "credited" (e.g. an inward GIRO payment) isn't handled here
+ * since no such sample has been seen yet. */
+function parseGiroDebit(text: string): ParsedTransaction | null {
+  // Ref capture uses [\s\S] rather than "." — the real sample line-wraps
+  // mid-reference ("S9200902E,\nIncome Tax."), which "." can't cross
+  // since it never matches a newline (same class of bug fixed in
+  // lib/parsers/trust.ts; see docs/solutions/logic-errors/).
+  const m = text.match(
+    /A transaction of\s+SGD\s*([\d,]+\.\d+)\s+was debited from your a\/c\s+([A-Za-z0-9]+)\s+at\s+(\d{1,2}:\d{2}(?:AM|PM))\s+(\d{1,2}-[A-Za-z]{3}-\d{4}),\s*SGT\.\s*Ref:\s*([\s\S]+?)\.?\s*(?:If unauthorised|$)/i,
+  );
+  if (!m) return null;
+  const [, amountStr, account, timeStr, dateStr, ref] = m;
+  return {
+    amountCents: Math.round(parseFloat(amountStr.replace(/,/g, "")) * 100),
+    currency: "SGD",
+    direction: "debit",
+    merchantRaw: cleanMerchant(ref),
+    bank: "UOB",
+    accountIdentifier: account.replace(/^X+/i, ""),
+    occurredAt: parseUobGiroDate(timeStr, dateStr),
+  };
+}
+
 export const uobParser: BankParser = {
   bank: "UOB",
   matchesSender(from: string): boolean {
@@ -128,6 +160,7 @@ export const uobParser: BankParser = {
       parsePayNowReceived(text) ??
       parseCardReversal(text) ??
       parseRefund(text, email.receivedAt) ??
+      parseGiroDebit(text) ??
       null
     );
   },
