@@ -94,9 +94,17 @@ export async function retryUnparsed(): Promise<{ recovered: number; stillFailing
         } catch (err) {
           console.error(`notice for unclassified email ${row.id} not sent`, err);
         }
-        if (row.labeledInGmail) {
-          await queueLabelRemoval(row.emailMessageId);
-        }
+        // Always queued, not gated on row.labeledInGmail — that flag only
+        // flips true once Apps Script's *next* poll acks having applied
+        // the label, so a row recovered in the gap between the label
+        // actually going on and that ack landing reads the flag as still
+        // false here. Queuing anyway is safe: removing a label that was
+        // never applied is a no-op both in queueLabelRemoval itself and
+        // in Apps Script's removeLabel call. Gating on the flag doesn't
+        // just skip a no-op — it permanently loses the ability to ever
+        // remove a label that WAS applied, because this delete takes the
+        // only copy of emailMessageId with it.
+        await queueLabelRemoval(row.emailMessageId);
         await db.delete(unclassifiedEmails).where(eq(unclassifiedEmails.id, row.id));
         recovered += 1;
         continue;
@@ -137,11 +145,11 @@ export async function retryUnparsed(): Promise<{ recovered: number; stillFailing
 
       // Queue the Gmail label removal BEFORE deleting the row — the
       // delete takes emailMessageId with it, and that id is the only way
-      // Apps Script can find the thread. Only when the label was
-      // actually applied; otherwise there's nothing to take off.
-      if (row.labeledInGmail) {
-        await queueLabelRemoval(row.emailMessageId);
-      }
+      // Apps Script can find the thread. Always queued, not gated on
+      // row.labeledInGmail — see the notice branch above for why that
+      // flag is unreliable here and gating on it permanently strands a
+      // label rather than merely skipping a no-op.
+      await queueLabelRemoval(row.emailMessageId);
 
       await db.delete(unclassifiedEmails).where(eq(unclassifiedEmails.id, row.id));
       recovered += 1;
@@ -169,9 +177,10 @@ export async function retryUnparsed(): Promise<{ recovered: number; stillFailing
           .from(transactions)
           .where(eq(transactions.emailMessageId, row.emailMessageId));
 
-        if (row.labeledInGmail) {
-          await queueLabelRemoval(row.emailMessageId);
-        }
+        // Always queued — see the notice branch above for why gating on
+        // row.labeledInGmail is unreliable and permanently strands a
+        // label rather than merely skipping a no-op.
+        await queueLabelRemoval(row.emailMessageId);
         await db.delete(unclassifiedEmails).where(eq(unclassifiedEmails.id, row.id));
         recovered += 1;
 
