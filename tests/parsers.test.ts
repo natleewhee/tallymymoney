@@ -160,3 +160,31 @@ test("12: UOB GIRO/bank-account debit (a fourth UOB template — line-wrapped Re
   assert.equal(transaction.accountIdentifier, "6835");
   assert.equal(transaction.occurredAt.toISOString(), "2026-09-07T10:54:00.000Z");
 });
+
+test("13: DBS own-account transfer — table date with no space between month and time", () => {
+  const email = loadSample("13-dbs-own-account-transfer-no-space-date.txt", new Date(Date.UTC(2026, 8, 9)));
+  const { bank, transaction } = dispatch(email);
+  assert.equal(bank, "DBS");
+  assert.ok(transaction);
+  assert.equal(transaction.direction, "debit");
+  assert.equal(transaction.currency, "SGD");
+  assert.equal(transaction.amountCents, 12465);
+  assert.equal(transaction.merchantRaw, "My Account (A/C ending 9358)");
+  assert.equal(transaction.accountIdentifier, "7350");
+  assert.equal(transaction.occurredAt.toISOString(), "2026-09-04T00:20:00.000Z");
+});
+
+test("14: UOB accumulated transit billing (a fifth UOB template, no merchant field)", () => {
+  const receivedAt = new Date(Date.UTC(2026, 7, 30, 2, 45)); // 10:45 SGT
+  const email = loadSample("14-uob-transit-billing.txt", receivedAt);
+  const { bank, transaction } = dispatch(email);
+  assert.equal(bank, "UOB");
+  assert.ok(transaction);
+  assert.equal(transaction.direction, "debit");
+  assert.equal(transaction.currency, "SGD");
+  assert.equal(transaction.amountCents, 186);
+  assert.equal(transaction.merchantRaw, null);
+  assert.equal(transaction.accountIdentifier, "4859");
+  // No time in body; hour/minute borrow from receivedAt, same as test 02.
+  assert.equal(transaction.occurredAt.getTime(), receivedAt.getTime());
+});
