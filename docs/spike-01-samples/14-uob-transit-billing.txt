@@ -1,0 +1,37 @@
+From: unialerts@uobgroup.com
+Subject: UOB - Transaction Alert
+Format: plain text
+Captured: 2026-09-09 (transaction occurred 2026-08-30)
+
+---
+
+Your accumulated transit transactions of SGD 1.86 has been billed to your
+UOB card ending 4859 on 30/08/26.
+UOB EMAIL DISCLAIMER: Any person receiving this email and any attachment(s)
+contained, shall treat the information as confidential and not misuse,
+copy, disclose, distribute or retain the information in any way that
+amounts to a breach of confidentiality. If you are not the intended
+recipient, please delete all copies of this email from your computer
+system. As the integrity of this message cannot be guaranteed, neither UOB
+nor any entity in the UOB Group shall be responsible for the contents. Any
+opinion in this email may not necessarily represent the opinion of UOB or
+any entity in the UOB Group.
+
+---
+
+Extracted:
+  direction: debit
+  amount: SGD 1.86
+  account_last4: 4859
+  occurred_at: 2026-08-30 (no time in body — date only, same borrowed-time
+    treatment as 02-uob-card-spend.txt)
+  merchant: none — EZ-Link/SimplyGo transit fares accumulate over a period
+            and bill as one lump sum, not tied to a single merchant. No
+            merchant name is ever given in this template (confirmed, not
+            a parse gap) — same situation as UOB PayNow-received.
+
+Note: a fifth UOB template (card spend, PayNow received, card reversal,
+refund, GIRO debit being the other four) — "Your accumulated transit
+transactions of {amount} has been billed to your UOB card ending {last4}
+on {date}." No parser recognised this shape at all before; the email fell
+through to unclassified-email triage.

@@ -146,6 +146,32 @@ function parseGiroDebit(text: string): ParsedTransaction | null {
   };
 }
 
+/** "Your accumulated transit transactions of SGD 1.86 has been billed to
+ * your UOB card ending 4859 on 30/08/26." EZ-Link/SimplyGo fares
+ * accumulate over a period and bill as one lump sum rather than per-ride
+ * — confirmed real sample. No merchant name is ever given, same as
+ * PayNow-received (not a parse gap); date-only, same borrowed-time
+ * treatment as parseCardSpend since the bank vouches only for the day. */
+function parseTransitBilling(text: string, receivedAt: Date): ParsedTransaction | null {
+  // "billed to your\nUOB card" — the real sample line-wraps between
+  // "your" and "UOB", so that gap needs \s+ too, not a literal space
+  // (same class of bug as the GIRO parser's Ref field above).
+  const m = text.match(
+    /Your accumulated transit transactions of\s+SGD\s*([\d,]+\.\d+)\s+has been billed to your\s+UOB card ending\s+([A-Za-z0-9]+)\s+on\s+(\d{2}\/\d{2}\/\d{2})\.?/i,
+  );
+  if (!m) return null;
+  const [, amountStr, last4, dateStr] = m;
+  return {
+    amountCents: Math.round(parseFloat(amountStr.replace(/,/g, "")) * 100),
+    currency: "SGD",
+    direction: "debit",
+    merchantRaw: null,
+    bank: "UOB",
+    accountIdentifier: last4,
+    occurredAt: parseUobShortDate(dateStr, receivedAt),
+  };
+}
+
 export const uobParser: BankParser = {
   bank: "UOB",
   matchesSender(from: string): boolean {
@@ -161,6 +187,7 @@ export const uobParser: BankParser = {
       parseCardReversal(text) ??
       parseRefund(text, email.receivedAt) ??
       parseGiroDebit(text) ??
+      parseTransitBilling(text, email.receivedAt) ??
       null
     );
   },

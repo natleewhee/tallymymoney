@@ -18,9 +18,14 @@ function sgtToUtc(year: number, month0: number, day: number, hour: number, minut
 
 /** DBS table shape: "16 Aug 12:43" / "16 AUG 18:56" — no year given.
  * Uses the email's own received date for the year, with a one-off
- * wraparound guard for messages parsed near a year boundary. */
+ * wraparound guard for messages parsed near a year boundary.
+ *
+ * The gap between month and time is `\s*`, not `\s+` — a real "Funds
+ * Transfer to own account" sample renders it with no space at all
+ * ("04 Sep08:20"), confirmed against two separate emails. Every other
+ * DBS table sample keeps the space, which `\s*` still accepts. */
 export function parseDbsTableDate(s: string, referenceDate: Date): Date {
-  const m = s.trim().match(/^(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{1,2}):(\d{2})$/);
+  const m = s.trim().match(/^(\d{1,2})\s+([A-Za-z]{3,})\s*(\d{1,2}):(\d{2})$/);
   if (!m) throw new Error(`Unrecognised DBS date format: "${s}"`);
   const [, dayStr, monthStr, hourStr, minuteStr] = m;
   const month0 = MONTHS[monthStr.slice(0, 3).toLowerCase()];
