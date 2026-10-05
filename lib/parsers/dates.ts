@@ -176,3 +176,25 @@ export function parseCitiDate(dateStr: string, timeStr: string): Date {
   const year = 2000 + Number(yyStr);
   return sgtToUtc(year, Number(monthStr) - 1, Number(dayStr), Number(hourStr), Number(minuteStr), Number(secondStr));
 }
+
+/** Amex Singapore alert shape (UNVERIFIED — see lib/parsers/amex.ts):
+ * "05 Oct 2026" / "5 October 2026", date only. No real Amex sample has
+ * been seen yet, so this is the commonly-reported template shape, not a
+ * confirmed one. Same borrowed-time treatment as parseUobRefundDate: the
+ * alert vouches only for the calendar day, so hour/minute come from the
+ * email's own received time rather than a fabricated midnight. */
+export function parseAmexDate(s: string, receivedAt: Date): Date {
+  const m = s.trim().match(/^(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{4})$/);
+  if (!m) throw new Error(`Unrecognised Amex date format: "${s}"`);
+  const [, dayStr, monthStr, yearStr] = m;
+  const month0 = MONTHS[monthStr.slice(0, 3).toLowerCase()];
+  if (month0 === undefined) throw new Error(`Unrecognised month in Amex date: "${s}"`);
+  const sgtReceived = new Date(receivedAt.getTime() + SGT_OFFSET_MINUTES * 60 * 1000);
+  return sgtToUtc(
+    Number(yearStr),
+    month0,
+    Number(dayStr),
+    sgtReceived.getUTCHours(),
+    sgtReceived.getUTCMinutes(),
+  );
+}

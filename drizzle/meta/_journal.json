@@ -57,6 +57,13 @@
       "when": 1788693252751,
       "tag": "0007_outgoing_nicolaos",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791216007507,
+      "tag": "0008_drop_holidays",
+      "breakpoints": true
     }
   ]
 }
