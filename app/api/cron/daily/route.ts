@@ -1,6 +1,10 @@
 // ARCHITECTURE.md §5: Vercel Hobby allows one daily cron, not the 5-minute
 // interval the ideation dump assumed. This invocation runs the pipeline
-// heartbeat. (The weekly month-to-date nudge and the 1st-of-month spend
+// heartbeat, then the Amex benefit tracker's housekeeping: make sure every
+// benefit's current period exists (check-on-read would create them anyway;
+// doing it here just gives reminders something to look at), send
+// closing-soon reminders, a Monday pace check on the min-spend challenge,
+// and refresh the pinned banner. (The weekly month-to-date nudge and the 1st-of-month spend
 // report were removed in the Amex-only pivot — the bot no longer does
 // spend summaries.)
 //
@@ -18,6 +22,8 @@ import { bot } from "@/lib/telegram/bot";
 import { db } from "@/lib/db";
 import { transactions, unclassifiedEmails } from "@/lib/schema";
 import { formatSgtDateTime } from "@/lib/sgt";
+import { listBenefitsWithCurrentPeriods } from "@/lib/cards";
+import { refreshBenefitBanner, sendClosingReminders, sendPaceReminders } from "@/lib/telegram/benefits";
 
 export const runtime = "nodejs";
 
@@ -97,5 +103,37 @@ export async function GET(req: Request): Promise<Response> {
     heartbeat = "check-failed";
   }
 
-  return Response.json({ status: "ok", heartbeat });
+  // --- Benefit tracker. Each step guarded separately so one failure
+  // (a Neon blip, a Telegram 400) doesn't silently skip the others. ---
+  const now = new Date();
+  let periods = "ok";
+  try {
+    await listBenefitsWithCurrentPeriods(now); // calls ensureCurrentBenefitPeriod for every benefit
+  } catch (err) {
+    console.error("ensuring benefit periods failed", err);
+    periods = "failed";
+  }
+
+  let reminders: number | "failed" = 0;
+  try {
+    reminders = await sendClosingReminders(now);
+  } catch (err) {
+    console.error("benefit closing reminders failed", err);
+    reminders = "failed";
+  }
+
+  // Mondays SGT only — see sendPaceReminders for why not daily.
+  let pace: number | "not-monday" | "failed" = "not-monday";
+  if (new Date(now.getTime() + 8 * 60 * 60 * 1000).getUTCDay() === 1) {
+    try {
+      pace = await sendPaceReminders(now);
+    } catch (err) {
+      console.error("pace check failed", err);
+      pace = "failed";
+    }
+  }
+
+  await refreshBenefitBanner(); // never throws
+
+  return Response.json({ status: "ok", heartbeat, periods, reminders, pace });
 }

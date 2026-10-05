@@ -10,6 +10,7 @@ import { resolveSgdAmount } from "@/lib/fx";
 import { normaliseMerchant } from "@/lib/merchant";
 import { notifyNewTransaction, notifyNotice, notifyParseFailure, notifyUnclassified } from "@/lib/telegram/notify";
 import { isUniqueViolation, secretsMatch } from "@/lib/db-utils";
+import { notifyBenefitSuggestions } from "@/lib/telegram/benefits";
 
 export const runtime = "nodejs";
 
@@ -171,6 +172,18 @@ export async function POST(req: Request): Promise<Response> {
   // is never sent again. notifyNewTransaction only stamps
   // telegram_message_id after a successful send, so a null there marks
   // exactly the rows that still need re-sending (see /pending).
+  // Benefit tracker: offer the new charge against any open auto_suggest
+  // credit it plausibly matches, and refresh the pinned banner (challenge
+  // progress just moved). Best-effort like every Telegram send here — the
+  // row is stored, so a failure must not 500 (Apps Script would retry
+  // into the unique constraint forever). Runs before the main alert so a
+  // notification failure below doesn't skip it.
+  try {
+    await notifyBenefitSuggestions(newTxId);
+  } catch (err) {
+    console.error(`benefit suggestion for transaction ${newTxId} failed`, err);
+  }
+
   try {
     await notifyNewTransaction(newTxId);
   } catch (err) {
