@@ -9,7 +9,14 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { dispatch } from "../lib/parsers/index.ts";
+import { dispatch as liveDispatch, dispatchWith, legacyParsers } from "../lib/parsers/index.ts";
+import type { InboundEmail } from "../lib/parsers/types.ts";
+
+// Since the Amex-only pivot, live dispatch() only tries the Amex parser.
+// Tests 01-14 exercise the now-dormant DBS/UOB/Trust/Citibank parsers
+// directly through dispatchWith(legacyParsers) so they stay regression-
+// covered as reference code.
+const dispatch = (email: InboundEmail) => dispatchWith(legacyParsers, email);
 import { loadSample } from "./fixtures.ts";
 
 test("01: UOB PayNow received", () => {
@@ -187,4 +194,62 @@ test("14: UOB accumulated transit billing (a fifth UOB template, no merchant fie
   assert.equal(transaction.accountIdentifier, "4859");
   // No time in body; hour/minute borrow from receivedAt, same as test 02.
   assert.equal(transaction.occurredAt.getTime(), receivedAt.getTime());
+});
+
+test("pivot: live dispatch no longer turns a UOB email into a transaction", () => {
+  const email = loadSample("02-uob-card-spend.txt", new Date(Date.UTC(2026, 7, 9, 5, 30)));
+  const { bank, transaction } = liveDispatch(email);
+  assert.equal(bank, null);
+  assert.equal(transaction, null);
+});
+
+// SYNTHETIC — 15-amex-TEMPLATE-needs-real-sample.txt is NOT a real email.
+// This only proves the regex logic does what it was written to do; it says
+// nothing about whether real Amex alerts look like this. Replace with a
+// real-sample test the first time one arrives (see lib/parsers/amex.ts).
+test("15 (SYNTHETIC): Amex card spend — assumed template, unverified", () => {
+  const receivedAt = new Date(Date.UTC(2026, 9, 5, 4, 12)); // 12:12 SGT
+  const email = loadSample("15-amex-TEMPLATE-needs-real-sample.txt", receivedAt);
+  const { bank, transaction } = liveDispatch(email);
+  assert.equal(bank, "Amex");
+  assert.ok(transaction);
+  assert.equal(transaction.direction, "debit");
+  assert.equal(transaction.currency, "SGD");
+  assert.equal(transaction.amountCents, 123456);
+  assert.equal(transaction.merchantRaw, "SINGAPORE AIRLINES LTD");
+  assert.equal(transaction.accountIdentifier, "12345");
+  // Date-only; hour/minute borrowed from receivedAt.
+  assert.equal(transaction.occurredAt.getTime(), receivedAt.getTime());
+});
+
+test("15b (SYNTHETIC): Amex foreign-currency spend, line-wrapped merchant", () => {
+  const receivedAt = new Date(Date.UTC(2026, 9, 3, 11, 0));
+  const email: InboundEmail = {
+    from: "American Express <AmericanExpress@welcome.americanexpress.com>",
+    subject: "Transaction alert",
+    textBody:
+      "A new transaction of JPY 18,500 was made on your Card ending 54321 at SUSHI\nSAITO TOKYO on 3 October 2026.",
+    htmlBody: "",
+    receivedAt,
+  };
+  const { bank, transaction } = liveDispatch(email);
+  assert.equal(bank, "Amex");
+  assert.ok(transaction);
+  assert.equal(transaction.currency, "JPY");
+  assert.equal(transaction.amountCents, 1850000);
+  assert.equal(transaction.merchantRaw, "SUSHI SAITO TOKYO");
+  assert.equal(transaction.accountIdentifier, "54321");
+});
+
+test("15c: an Amex email in an unknown shape routes to R3 triage, not a throw", () => {
+  const email: InboundEmail = {
+    from: "AmericanExpress@welcome.americanexpress.com",
+    subject: "Your statement is ready",
+    textBody: "Your October statement is now available.",
+    htmlBody: "",
+    receivedAt: new Date(),
+  };
+  const { bank, transaction } = liveDispatch(email);
+  assert.equal(bank, "Amex");
+  assert.equal(transaction, null);
 });

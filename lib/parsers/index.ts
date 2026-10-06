@@ -3,11 +3,21 @@ import { dbsParser } from "./dbs";
 import { uobParser } from "./uob";
 import { trustParser } from "./trust";
 import { citibankParser } from "./citibank";
+import { amexParser } from "./amex";
 
-// Amex isn't here — no sample has ever been seen from it (SPIKE-01-RESULTS.md).
-// An email from an unrecognised sender falls through to FR-4 triage in
-// /api/ingest, same as a recognised sender whose shape doesn't match.
-export const parsers: BankParser[] = [dbsParser, uobParser, trustParser, citibankParser];
+// Amex-only pivot (2026-10): only the Amex Platinum Charge is tracked now,
+// both to stay within hosting/DB quota and because the bot is a card
+// benefit tracker rather than a general spend tracker. The Gmail-side
+// forwarding filter is narrowed separately in Apps Script; this list is
+// the app-side guarantee that nothing else becomes a transaction even if
+// a non-Amex email still arrives (it falls through to FR-4 triage, where
+// "Ignore this type" silences it for good).
+export const parsers: BankParser[] = [amexParser];
+
+/** DORMANT — not dispatched. Kept as working reference code (and still
+ * covered by tests/parsers.test.ts via dispatchWith) in case a bank is
+ * ever brought back; deleting them was out of scope for the pivot. */
+export const legacyParsers: BankParser[] = [dbsParser, uobParser, trustParser, citibankParser];
 
 export interface DispatchResult {
   bank: string | null;
@@ -29,7 +39,13 @@ export interface DispatchResult {
  * both are FR-4 triage cases, but the distinction is useful for
  * unclassified_emails.note. */
 export function dispatch(email: InboundEmail): DispatchResult {
-  for (const parser of parsers) {
+  return dispatchWith(parsers, email);
+}
+
+/** dispatch() against an explicit parser list — lets the dormant
+ * legacyParsers keep their regression tests without being live. */
+export function dispatchWith(list: BankParser[], email: InboundEmail): DispatchResult {
+  for (const parser of list) {
     if (parser.matchesSender(email.from)) {
       // The amount and date helpers throw on an unrecognised shape rather
       // than returning null. Uncaught, that propagates out of /api/ingest

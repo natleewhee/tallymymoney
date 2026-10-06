@@ -67,7 +67,7 @@ Verify secret → identify bank by sender → parse → insert with `Message-ID`
 Webhook for button callbacks and slash commands. Sub-second work only.
 
 ### `/api/cron/daily`
-Vercel Hobby allows one daily cron. It exits immediately unless it is the 1st, when it builds and sends the monthly report. Cheaper than fighting the free-tier scheduler.
+Vercel Hobby allows one daily cron. Runs the pipeline heartbeat. (The 1st-of-month spend report and weekly nudge were removed in the 2026-10 Amex-only pivot.)
 
 ### `/api/needs-parser-queue`
 Confirmed 2026-08-19: closes the loop between "Nat tapped Needs parser" and "Nat knows which Gmail email to forward." The bot itself has no Gmail access — only Apps Script does — so this is a small polling handoff, not a push. `GET` returns `unclassified_emails` rows with `status = 'needs_parser'` and `labeled_in_gmail = false`; Apps Script's `pollInbox` calls it every 5 minutes (piggybacking on the existing trigger, no second trigger needed), labels the corresponding Gmail thread `🔴 tallymymoney-needs-parser`, then `POST`s the ids back to mark them labelled. Same shared-secret header as `/api/ingest`.
@@ -116,34 +116,14 @@ CREATE TABLE transactions (
                                                  -- earlier row. Reporting nets it off the
                                                  -- referenced transaction and excludes this
                                                  -- row from independent totals
-  holiday_id             INT REFERENCES holidays(id),  -- holiday mode: set while a holiday
-                                                 -- is active at ingest time, or via
-                                                 -- /holiday tag for a pre-trip booking.
-                                                 -- A separate dimension from category, not
-                                                 -- a replacement — see holidays below
   raw_email              TEXT,                  -- kept: the only way to fix a bad parse
   telegram_message_id    BIGINT,
   created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   tagged_at              TIMESTAMPTZ
 );
 
--- Holiday mode: while active, every transaction that arrives (arrival
--- semantics, not occurred_at) gets tagged with holiday_id above,
--- alongside its normal category. computeRangeSummary excludes tagged
--- rows from ordinary date-scoped totals; computeHolidaySummary sums a
--- holiday's rows regardless of date, so a trip spanning a month
--- boundary still has one number. Manual lifecycle only (/holiday
--- start|end) — no automatic detection.
-CREATE TABLE holidays (
-  id                SERIAL PRIMARY KEY,
-  name              TEXT NOT NULL,
-  started_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  ended_at          TIMESTAMPTZ,             -- NULL while active; idx_holidays_one_active
-                                              -- below enforces at most one such row at a time
-  pinned_chat_id    TEXT,                    -- the pinned "still on holiday" reminder
-  pinned_message_id BIGINT,                  -- message, edited in place as spend comes in
-  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+-- (holiday mode and its `holidays` table were removed in the 2026-10
+-- Amex-only pivot — migration 0008_drop_holidays.)
 
 -- merchant memory: the feature that keeps tagging to one tap
 CREATE TABLE merchant_rules (

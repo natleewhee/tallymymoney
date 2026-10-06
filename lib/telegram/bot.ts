@@ -2,52 +2,22 @@ import { Bot, InputFile } from "grammy";
 import { createHash, randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gte, isNull, sql } from "drizzle-orm";
 import { db } from "../db";
-import { merchantRules, senderRules, settlements, tagUndoLog, transactions, unclassifiedEmails } from "../schema";
+import { merchantRules, senderRules, tagUndoLog, transactions, unclassifiedEmails } from "../schema";
 import { CATEGORIES } from "../categories";
 import { normaliseMerchant } from "../merchant";
 import { csvField } from "../csv";
 import {
   categoryKeyboard,
-  partnerSettleKeyboard,
   pendingKeyboard,
   reduceCandidatesKeyboard,
   rulesKeyboard,
   splitKeyboard,
 } from "./keyboards";
-import {
-  computeHolidaySummaries,
-  computeHolidaySummary,
-  computeRangeSummary,
-  fmtSgd,
-  formatHolidayReport,
-  formatPendingReport,
-  formatRangeReport,
-} from "./reports";
-import {
-  currentMonthBounds,
-  currentMonthRange,
-  formatSgtDateTime,
-  last7DaysRange,
-  monthBoundsFor,
-  previousMonthToDateRange,
-  todayRange,
-} from "../sgt";
+import { fmtSgd, formatPendingReport } from "./reports";
+import { currentMonthRange } from "../sgt";
 import { resendUnnotified, retryUnparsed } from "../recovery";
 import { notifyFxPending, notifyNewTransaction } from "./notify";
 import { queueLabelRemoval } from "../gmail-labels";
-import {
-  clearPinIfMessageGone,
-  endActiveHoliday,
-  formatHolidayBannerText,
-  getActiveHoliday,
-  listHolidays,
-  recordPin,
-  refreshHolidayBanner,
-  resolveHolidayRef,
-  startHoliday,
-  tagTransactionHoliday,
-} from "../holidays";
-
 // How many untagged transactions /pending will re-send as tappable
 // messages. Capped so a long-neglected backlog does not dump fifty
 // notifications into the chat at once; the summary still reports
@@ -338,9 +308,8 @@ bot.on("callback_query:data", async (ctx) => {
         }
 
         // Defect 6: nothing previously stopped a reduction larger than
-        // its target — reports.ts nets sgd_amount_cents minus reductions
-        // with no floor, so an over-sized one pushes a category total
-        // negative with no flag anywhere. Reject rather than link.
+        // its target — netting has no floor, so an over-sized one pushes
+        // a total negative with no flag anywhere. Reject rather than link.
         const [{ alreadyReduced }] = await db
           .select({ alreadyReduced: sql<number>`coalesce(sum(${transactions.sgdAmountCents}), 0)::int` })
           .from(transactions)
@@ -365,40 +334,6 @@ bot.on("callback_query:data", async (ctx) => {
         const [txId] = rest;
         await ctx.editMessageText(`Transaction #${txId} — use /pending to revisit`);
         await ctx.answerCallbackQuery();
-        return;
-      }
-      case "ps": {
-        // FR-19: "mark settled" — /partner's button carries no period
-        // (rest is empty) and always means the current calendar month;
-        // the automatic monthly report's button encodes YYYY-MM (rest[0])
-        // since by the time it's tapped the calendar may have already
-        // rolled to a new month.
-        let start: Date;
-        let end: Date;
-        if (rest[0]) {
-          const [y, mo] = rest[0].split("-").map(Number);
-          ({ start, end } = monthBoundsFor(y, mo - 1));
-        } else {
-          ({ start, end } = currentMonthBounds());
-        }
-        const [existing] = await db
-          .select()
-          .from(settlements)
-          .where(and(eq(settlements.periodStart, start), eq(settlements.periodEnd, end)));
-        if (existing) {
-          await ctx.answerCallbackQuery("Already settled");
-          return;
-        }
-        const summary = await computeRangeSummary(start, end);
-        const half = Math.round(summary.joint / 2);
-        await db.insert(settlements).values({
-          periodStart: start,
-          periodEnd: end,
-          jointTotalCents: summary.joint,
-          halfCents: half,
-        });
-        await ctx.editMessageText(`✅ Settled — ${fmtSgd(summary.joint)} joint, ${fmtSgd(half)} each.`);
-        await ctx.answerCallbackQuery("Marked settled");
         return;
       }
       case "resend": {
@@ -540,55 +475,19 @@ bot.command("help", async (ctx) => {
   await ctx.reply(
     [
       "COMMANDS",
-      "/today — Today's spending",
-      "/week — Last 7 days",
-      "/month — This month, by category",
       "/pending — Transactions and email patterns awaiting action",
       "/add <amount> <merchant> — Log a cash spend, e.g. /add 12.50 Kopitiam",
-      "/partner — Shareable summary + settle-up figure for this month",
       "/export — CSV export for this month",
       "/rules — List/clear ignore or needs-parser rules",
       "/undo — Revert the last tag (and its merchant rule)",
       "/estimates — List transactions with an unconfirmed FX estimate",
       "/merchants — Merchant memory, sorted by how often each rule fires",
-      "/holiday start <name> — Begin holiday mode; tags new spend and pins a running total",
-      "/holiday end — End the active holiday",
-      "/holiday status — Show the active holiday, if any",
-      "/holiday tag <id> [name] — Tag a transaction to a holiday (the active one if none named)",
-      "/holiday untag <id> — Remove a transaction's holiday tag",
-      "/holiday report [name] — Total + category breakdown for a holiday (the active one if none named)",
-      "/holidays — List past and active holidays",
       "",
       "ON A TRANSACTION MESSAGE",
       "Reply with a bare number (e.g. 130.50) to confirm an unconfirmed FX amount — only works while it's still flagged, and only on the notification itself (tagging replaces it, so use /estimates to get it back).",
       "Reply with any other text to set that transaction's description.",
       "↩️ Reduce nets a refund/reversal off an earlier purchase instead of tagging it as a new expense.",
     ].join("\n"),
-  );
-});
-
-bot.command("today", async (ctx) => {
-  const { start, end } = todayRange();
-  await ctx.reply(await formatRangeReport("Today", start, end));
-});
-
-bot.command("week", async (ctx) => {
-  const { start, end } = last7DaysRange();
-  await ctx.reply(await formatRangeReport("Last 7 days", start, end));
-});
-
-bot.command("month", async (ctx) => {
-  const { start, end } = currentMonthRange();
-  // Same day-of-month cutoff one month back, not the full previous
-  // month — a finished month will always look bigger than a
-  // still-in-progress one, which isn't a meaningful comparison.
-  const prevRange = previousMonthToDateRange();
-  const prevSummary = await computeRangeSummary(prevRange.start, prevRange.end);
-  await ctx.reply(
-    await formatRangeReport("This month", start, end, {
-      label: "same point last month",
-      total: prevSummary.total,
-    }),
   );
 });
 
@@ -806,31 +705,6 @@ bot.command("rules", async (ctx) => {
   await ctx.reply(lines.join("\n"), { reply_markup: rulesKeyboard(buttons) });
 });
 
-// FR-19: on-demand only, never automatic. Nat forwards this himself —
-// no standing access, no second chat wired up.
-bot.command("partner", async (ctx) => {
-  const { start, end } = currentMonthBounds();
-  const report = await formatRangeReport("Shared this month", start, end);
-  const summary = await computeRangeSummary(start, end);
-  const half = Math.round(summary.joint / 2);
-
-  const [existing] = await db
-    .select()
-    .from(settlements)
-    .where(and(eq(settlements.periodStart, start), eq(settlements.periodEnd, end)));
-
-  const settleLines = ["", "🤝 SETTLE-UP", `Joint total: ${fmtSgd(summary.joint)}`, `Your half: ${fmtSgd(half)}`];
-  if (existing) {
-    settleLines.push(
-      `✅ Already settled — ${fmtSgd(existing.jointTotalCents)} joint, ${fmtSgd(existing.halfCents)} each, on ${formatSgtDateTime(existing.settledAt)}`,
-    );
-  }
-
-  await ctx.reply(`${report}\n${settleLines.join("\n")}\n\nForward this to share — nothing is sent automatically.`, {
-    reply_markup: !existing && summary.joint > 0 ? partnerSettleKeyboard() : undefined,
-  });
-});
-
 // FR-16 (P2): CSV export for the current month by default.
 bot.command("export", async (ctx) => {
   const { start, end } = currentMonthRange();
@@ -841,10 +715,8 @@ bot.command("export", async (ctx) => {
       and(
         sql`${transactions.occurredAt} >= ${start}`,
         sql`${transactions.occurredAt} < ${end}`,
-        // Matches formatRangeReport's scope — an ignored row (a
-        // verification hold, a refund, an own-account transfer) isn't
-        // part of any report total either, so it shouldn't be in a CSV
-        // meant to reconcile against one.
+        // An ignored row (a verification hold, a refund, an own-account
+        // transfer) isn't real spend, so it stays out of the CSV.
         sql`${transactions.status} != 'ignored'`,
       ),
     )
@@ -896,187 +768,4 @@ bot.command("export", async (ctx) => {
 
   const csv = header + body;
   await ctx.replyWithDocument(new InputFile(Buffer.from(csv, "utf-8"), "tallymymoney-export.csv"));
-});
-
-const HOLIDAY_USAGE = [
-  "Usage:",
-  "/holiday start <name> — begin holiday mode",
-  "/holiday end — end the active holiday",
-  "/holiday status — show the active holiday",
-  "/holiday tag <id> [name] — tag a transaction (active holiday if none named)",
-  "/holiday untag <id> — remove a transaction's holiday tag",
-  "/holiday report [name] — total + category breakdown (active holiday if none named)",
-].join("\n");
-
-/** Resolves a holiday from an optional trailing name/id argument,
- * falling back to the active holiday when none is given. Centralised
- * here since /holiday tag and /holiday report both need exactly this
- * fallback, including the same ambiguous-match handling. */
-async function resolveHolidayArgOrActive(
-  ref: string,
-): Promise<{ id: number; name: string } | { error: string }> {
-  if (!ref) {
-    const active = await getActiveHoliday();
-    if (!active) return { error: "No active holiday — name one, e.g. /holiday tag 42 Japan trip." };
-    return { id: active.id, name: active.name };
-  }
-  const resolved = await resolveHolidayRef(ref);
-  if (resolved.kind === "not-found") return { error: `No holiday matches "${ref}". See /holidays.` };
-  if (resolved.kind === "ambiguous") {
-    const list = resolved.matches.map((h) => `#${h.id} ${h.name}`).join(", ");
-    return { error: `Multiple holidays match "${ref}" — specify by id: ${list}` };
-  }
-  return { id: resolved.holiday.id, name: resolved.holiday.name };
-}
-
-bot.command("holiday", async (ctx) => {
-  const raw = ctx.match.trim();
-  const spaceIdx = raw.search(/\s/);
-  const sub = (spaceIdx === -1 ? raw : raw.slice(0, spaceIdx)).toLowerCase();
-  const rest = (spaceIdx === -1 ? "" : raw.slice(spaceIdx + 1)).trim();
-
-  switch (sub) {
-    case "start": {
-      if (!rest) {
-        await ctx.reply("Usage: /holiday start <name>\ne.g. /holiday start Japan trip");
-        return;
-      }
-      const active = await getActiveHoliday();
-      if (active) {
-        await ctx.reply(`🌴 ${active.name} is already active — /holiday end it first.`);
-        return;
-      }
-      const holiday = await startHoliday(rest);
-      if (!holiday) {
-        // idx_holidays_one_active (schema.ts) rejected this — a holiday
-        // became active between the getActiveHoliday() check above and
-        // this insert (a retried webhook delivery, or two taps close
-        // together). Same user-facing message as the ordinary check.
-        const active = await getActiveHoliday();
-        await ctx.reply(`🌴 ${active?.name ?? "Another holiday"} is already active — /holiday end it first.`);
-        return;
-      }
-      const chatId = ctx.chat.id.toString();
-      try {
-        const bannerText = await formatHolidayBannerText(holiday, new Date());
-        const msg = await ctx.reply(bannerText);
-        await ctx.api.pinChatMessage(chatId, msg.message_id, { disable_notification: true });
-        await recordPin(holiday.id, chatId, msg.message_id);
-      } catch (err) {
-        console.error(`could not pin holiday banner for #${holiday.id}`, err);
-        await ctx.reply(
-          `🌴 ${holiday.name} started, but the pinned reminder couldn't be set up — /holiday status still works.`,
-        );
-      }
-      return;
-    }
-
-    case "end": {
-      const ended = await endActiveHoliday();
-      if (!ended) {
-        await ctx.reply("No active holiday.");
-        return;
-      }
-      // Computed once and passed into both formatHolidayBannerText and
-      // formatHolidayReport below — each used to call computeHolidaySummary
-      // itself, so ending a holiday ran the same query twice.
-      const summary = await computeHolidaySummary(ended.id);
-      if (ended.pinnedChatId && ended.pinnedMessageId) {
-        try {
-          const finalText = await formatHolidayBannerText(ended, new Date(), summary);
-          await ctx.api.editMessageText(ended.pinnedChatId, ended.pinnedMessageId, finalText);
-          await ctx.api.unpinChatMessage(ended.pinnedChatId, ended.pinnedMessageId);
-        } catch (err) {
-          if (!(await clearPinIfMessageGone(ended.id, err))) {
-            console.error(`could not finalise/unpin holiday banner for #${ended.id}`, err);
-          }
-        }
-      }
-      await ctx.reply(await formatHolidayReport(ended.name, ended.id, summary));
-      return;
-    }
-
-    case "status": {
-      const active = await getActiveHoliday();
-      if (!active) {
-        await ctx.reply("No holiday active.");
-        return;
-      }
-      const report = await formatHolidayReport(active.name, active.id);
-      const pinNote = active.pinnedChatId && active.pinnedMessageId ? "" : "\n\n⚠️ No pinned reminder for this holiday — it may have been deleted from the chat.";
-      await ctx.reply(report + pinNote);
-      return;
-    }
-
-    case "tag": {
-      const m = rest.match(/^(\d+)\s*(.*)$/s);
-      if (!m) {
-        await ctx.reply("Usage: /holiday tag <transaction id> [holiday name or id]");
-        return;
-      }
-      const [, idStr, nameOrId] = m;
-      const resolved = await resolveHolidayArgOrActive(nameOrId.trim());
-      if ("error" in resolved) {
-        await ctx.reply(resolved.error);
-        return;
-      }
-      const txId = Number(idStr);
-      const updatedId = await tagTransactionHoliday(txId, resolved.id);
-      if (updatedId === null) {
-        await ctx.reply(`Transaction #${txId} not found.`);
-        return;
-      }
-      await refreshHolidayBanner(resolved.id);
-      await ctx.reply(`🌴 #${txId} tagged to ${resolved.name}.`);
-      return;
-    }
-
-    case "untag": {
-      if (!/^\d+$/.test(rest)) {
-        await ctx.reply("Usage: /holiday untag <transaction id>");
-        return;
-      }
-      const txId = Number(rest);
-      const [tx] = await db.select({ holidayId: transactions.holidayId }).from(transactions).where(eq(transactions.id, txId));
-      if (!tx) {
-        await ctx.reply(`Transaction #${txId} not found.`);
-        return;
-      }
-      await tagTransactionHoliday(txId, null);
-      if (tx.holidayId !== null) await refreshHolidayBanner(tx.holidayId);
-      await ctx.reply(`Removed holiday tag from #${txId}.`);
-      return;
-    }
-
-    case "report": {
-      const resolved = await resolveHolidayArgOrActive(rest);
-      if ("error" in resolved) {
-        await ctx.reply(resolved.error);
-        return;
-      }
-      await ctx.reply(await formatHolidayReport(resolved.name, resolved.id));
-      return;
-    }
-
-    default:
-      await ctx.reply(HOLIDAY_USAGE);
-  }
-});
-
-bot.command("holidays", async (ctx) => {
-  const all = await listHolidays();
-  if (all.length === 0) {
-    await ctx.reply("No holidays yet — /holiday start <name> to begin one.");
-    return;
-  }
-  // One batched query for every holiday's transactions plus one shared
-  // reduction fetch, not one of each per holiday — a list of N holidays
-  // no longer costs N+1 round trips.
-  const summaries = await computeHolidaySummaries(all.map((h) => h.id));
-  const lines = ["🌴 HOLIDAYS", ""];
-  for (const h of all) {
-    const status = h.endedAt ? "ended" : "active";
-    lines.push(`#${h.id} ${h.name} (${status}) — ${fmtSgd(summaries.get(h.id)!.total)}`);
-  }
-  await ctx.reply(lines.join("\n"));
 });

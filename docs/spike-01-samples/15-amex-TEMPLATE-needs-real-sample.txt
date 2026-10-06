@@ -1,0 +1,36 @@
+From: AmericanExpress@welcome.americanexpress.com
+Subject: Amex Transaction Alert
+Format: plain text
+Captured: NEVER — SYNTHETIC TEMPLATE, written 2026-10-05 without a real sample
+
+---
+
+A new transaction of SGD 1,234.56 was made on your Card ending 12345 at
+SINGAPORE AIRLINES LTD on 05 Oct 2026.
+If you did not make this transaction, please call the number on the back
+of your Card.
+
+---
+
+Extracted:
+  direction: debit
+  amount: SGD 1,234.56
+  account_last4: 12345 (Amex quotes the last 5 digits, assumed)
+  merchant: SINGAPORE AIRLINES LTD
+  occurred_at: 2026-10-05 (date only — time borrowed from receivedAt)
+
+!!! THIS IS NOT A REAL EMAIL. !!!
+This fixture is a best-guess reconstruction of the American Express
+Singapore transaction-alert template, written so tests can exercise the
+regex in lib/parsers/amex.ts. The sender address, subject, wording, date
+format and card-ending length are ALL unverified.
+
+The first time a real Amex alert fails to parse (it will show up in
+Telegram as "COULDN'T READ THIS ONE — Bank: Amex"), follow the same
+real-sample workflow used for the DBS/UOB fixes:
+  1. Tap "Needs parser", forward the real email, and save it here as
+     16-amex-<shape>.txt with the real headers/body.
+  2. Recalibrate lib/parsers/amex.ts (and parseAmexDate in dates.ts) to
+     the real wording, and add a test against the real fixture.
+  3. /pending → "Retry stuck emails" to recover anything that queued.
+  4. Delete or clearly demote this template once a real sample exists.
