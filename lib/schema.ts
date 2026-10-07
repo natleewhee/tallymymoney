@@ -16,6 +16,7 @@ import {
   text,
   timestamp,
   type AnyPgColumn,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 export const transactions = pgTable(
@@ -57,6 +58,12 @@ export const transactions = pgTable(
     reducesTransactionId: integer("reduces_transaction_id").references(
       (): AnyPgColumn => transactions.id,
     ),
+
+    // Benefit tracker: true for rows that post as Amex transactions but
+    // must not count toward a min-spend challenge (the annual fee, cash
+    // advances, Amex's own fee reversals). Null = counts, the normal case.
+    // Set by hand (SQL or a future command) — nothing auto-detects these.
+    excludedFromQualifyingSpend: boolean("excluded_from_qualifying_spend"),
 
     rawEmail: text("raw_email"),
     telegramMessageId: bigint("telegram_message_id", { mode: "number" }),
@@ -234,6 +241,123 @@ export const settlements = pgTable(
     index("idx_settlements_period").on(table.periodStart, table.periodEnd),
   ],
 );
+
+// ---------------------------------------------------------------------------
+// Card benefit tracker (Amex Platinum Charge pivot, 2026-10).
+//
+// Challenge progress is a DERIVED query against `transactions` (filtered
+// by account_last4, date range and excluded_from_qualifying_spend) — there
+// is deliberately no card_challenge_id on transactions. Card spend counts
+// normally AND toward any challenge window it falls in; unlike the old
+// holiday_id tag, nothing is ever pulled out of anything else.
+// ---------------------------------------------------------------------------
+
+export const cards = pgTable("cards", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  // Null until Nat fills it in. While null, challenge progress counts every
+  // Amex-bank transaction (single-card setup), not one specific card.
+  accountLast4: text("account_last4"),
+  annualFeeCents: bigint("annual_fee_cents", { mode: "number" }),
+  // Anchors reset_anchor = 'cardmember_year' benefits. Null → those fall
+  // back to calendar years (flagged on the /benefits board).
+  renewalDate: timestamp("renewal_date", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const cardChallenges = pgTable(
+  "card_challenges",
+  {
+    id: serial("id").primaryKey(),
+    cardId: integer("card_id").notNull().references(() => cards.id),
+    type: text("type").notNull(),
+    label: text("label").notNull(),
+    targetSpendCents: bigint("target_spend_cents", { mode: "number" }),
+    // Nullable: the welcome-bonus windows hang off the card's approval
+    // date, which Nat sets after seeding. Null period = "not configured".
+    periodStart: timestamp("period_start", { withTimezone: true }),
+    periodEnd: timestamp("period_end", { withTimezone: true }),
+    deadlineBasis: text("deadline_basis"),
+    metAt: timestamp("met_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  () => [check("challenge_type_check", sql`type IN ('min_spend','bonus_month')`)],
+);
+
+// Manual corrections from /cardadjust (e.g. "+500" for a charge whose
+// alert email never parsed). Summed on top of the derived transaction
+// total — kept separate so the correction is visible and reversible,
+// rather than faking a transaction row.
+export const cardChallengeAdjustments = pgTable("card_challenge_adjustments", {
+  id: serial("id").primaryKey(),
+  challengeId: integer("challenge_id").notNull().references(() => cardChallenges.id),
+  amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
+  note: text("note"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const cardBenefits = pgTable(
+  "card_benefits",
+  {
+    id: serial("id").primaryKey(),
+    cardId: integer("card_id").notNull().references(() => cards.id),
+    name: text("name").notNull(),
+    amountCents: bigint("amount_cents", { mode: "number" }),
+    cadence: text("cadence").notNull(),
+    trackingMode: text("tracking_mode").notNull(),
+    resetAnchor: text("reset_anchor").notNull().default("calendar"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  () => [
+    check("benefit_cadence_check", sql`cadence IN ('one_time','bimonthly','semi_annual','annual')`),
+    check(
+      "benefit_tracking_mode_check",
+      sql`tracking_mode IN ('auto_suggest','manual_log','manual_running_total','one_time_checklist')`,
+    ),
+    check("benefit_reset_anchor_check", sql`reset_anchor IN ('calendar','cardmember_year')`),
+  ],
+);
+
+// Created check-on-read by lib/cards.ts ensureCurrentBenefitPeriod — no
+// cron is needed for correctness. Elapsed open periods are marked
+// 'expired', never deleted, so missed credits stay visible as history.
+// periodEnd is EXCLUSIVE (SGT midnight after the last valid day).
+export const benefitPeriods = pgTable(
+  "benefit_periods",
+  {
+    id: serial("id").primaryKey(),
+    benefitId: integer("benefit_id").notNull().references(() => cardBenefits.id),
+    periodStart: timestamp("period_start", { withTimezone: true }).notNull(),
+    periodEnd: timestamp("period_end", { withTimezone: true }).notNull(),
+    usedCents: bigint("used_cents", { mode: "number" }).notNull().default(0),
+    status: text("status").notNull().default("open"),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    note: text("note"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check("benefit_period_status_check", sql`status IN ('open','used','partial','expired')`),
+    // Check-on-read can race (two webhook deliveries at once); the unique
+    // index makes the second insert fail instead of duplicating a period.
+    uniqueIndex("idx_benefit_period_unique").on(table.benefitId, table.periodStart),
+  ],
+);
+
+// Tiny key/value store: the single pinned benefit-banner's chat/message
+// ids, plus "awaiting a reply" prompts (key prompt:<message_id>) for the
+// tap-a-button-then-reply flows on /benefits — same reply-to-message idea
+// the FX amend flow uses, but those prompts aren't transactions.
+export const appSettings = pgTable("app_settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type Card = typeof cards.$inferSelect;
+export type CardChallenge = typeof cardChallenges.$inferSelect;
+export type CardBenefit = typeof cardBenefits.$inferSelect;
+export type BenefitPeriod = typeof benefitPeriods.$inferSelect;
 
 export type Transaction = typeof transactions.$inferSelect;
 export type NewTransaction = typeof transactions.$inferInsert;

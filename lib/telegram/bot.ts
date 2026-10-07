@@ -18,6 +18,13 @@ import { currentMonthRange } from "../sgt";
 import { resendUnnotified, retryUnparsed } from "../recovery";
 import { notifyFxPending, notifyNewTransaction } from "./notify";
 import { queueLabelRemoval } from "../gmail-labels";
+import {
+  handleBenefitCallback,
+  handleBenefitsCommand,
+  handleCardAdjustCommand,
+  handlePromptReply,
+  handleUseBenefitCommand,
+} from "./benefits";
 // How many untagged transactions /pending will re-send as tappable
 // messages. Capped so a long-neglected backlog does not dump fifty
 // notifications into the chat at once; the summary still reports
@@ -421,6 +428,8 @@ bot.on("callback_query:data", async (ctx) => {
         return;
       }
       default:
+        // Benefit tracker buttons (ba/bn/bm/bu/bl/be/cm) — see benefits.ts.
+        if (await handleBenefitCallback(ctx, action, rest)) return;
         await ctx.answerCallbackQuery();
     }
   } catch (err) {
@@ -452,9 +461,14 @@ bot.on("message:text", async (ctx, next) => {
     .select()
     .from(transactions)
     .where(eq(transactions.telegramMessageId, replyToId));
-  if (!tx) return;
-
   const text = ctx.message.text.trim();
+  if (!tx) {
+    // Not a transaction — maybe a reply to a /benefits "reply with an
+    // amount" prompt (same reply-to-message pattern, keyed in app_settings).
+    await handlePromptReply(ctx, replyToId, text);
+    return;
+  }
+
   const isBareNumber = /^\d+(\.\d{1,2})?$/.test(text);
 
   if ((tx.fxSource === "spot_estimate" || tx.fxSource === "placeholder") && isBareNumber) {
@@ -475,6 +489,9 @@ bot.command("help", async (ctx) => {
   await ctx.reply(
     [
       "COMMANDS",
+      "/benefits — Amex Platinum benefit board (credits, cycles, status) + refresh the pinned banner",
+      "/usebenefit <name> [amount] — Mark a benefit used, e.g. /usebenefit wine 200",
+      "/cardadjust [challenge] <+/-amount> [note] — Correct min-spend progress, e.g. /cardadjust spend +500",
       "/pending — Transactions and email patterns awaiting action",
       "/add <amount> <merchant> — Log a cash spend, e.g. /add 12.50 Kopitiam",
       "/export — CSV export for this month",
@@ -769,3 +786,8 @@ bot.command("export", async (ctx) => {
   const csv = header + body;
   await ctx.replyWithDocument(new InputFile(Buffer.from(csv, "utf-8"), "tallymymoney-export.csv"));
 });
+
+// Amex Platinum benefit tracker — logic lives in ./benefits.ts.
+bot.command("benefits", (ctx) => handleBenefitsCommand(ctx));
+bot.command("usebenefit", (ctx) => handleUseBenefitCommand(ctx, ctx.match));
+bot.command("cardadjust", (ctx) => handleCardAdjustCommand(ctx, ctx.match));
